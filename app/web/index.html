@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MNR Launcher</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Top bar, shown once boot finishes -->
+  <div id="topbar" class="topbar hidden">
+    <div class="topbar-left">
+      <span class="app-name">⚞MNR⚟ Launcher</span>
+    </div>
+    <div class="topbar-center">
+      <div id="pcloud-status" class="status-pill status-unknown">
+        <span class="status-dot"></span>
+        <span class="status-text">Checking pCloud...</span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <button id="user-button" class="user-button">👤 <span id="user-label">Select user</span></button>
+    </div>
+  </div>
+
+  <!-- Boot screen -->
+  <div id="boot-screen" class="screen">
+    <div class="boot-box">
+      <div class="boot-title">⚞MNR⚟ Launcher</div>
+      <div id="boot-lines" class="boot-lines"></div>
+    </div>
+  </div>
+
+  <!-- pCloud missing / error screen -->
+  <div id="error-screen" class="screen hidden">
+    <div class="error-box">
+      <div class="error-title">🔴 pCloud Drive not detected</div>
+      <p>This tool needs pCloud Drive set up and running to work.</p>
+      <p><a id="onboarding-link" href="#" target="_blank">Open the pCloud Drive setup guide</a></p>
+      <p>If you're not sure what to do, contact the technical director.</p>
+    </div>
+  </div>
+
+  <!-- User picker screen -->
+  <div id="user-screen" class="screen hidden">
+    <div class="user-box">
+      <div class="user-title">Who are you?</div>
+      <input id="user-search" class="user-search" type="text" placeholder="🔎 Search your name...">
+      <div id="user-list" class="user-list"></div>
+    </div>
+  </div>
+
+  <!-- Home screen -->
+  <div id="home-screen" class="screen hidden">
+    <div class="tile-section">
+      <div class="tile-section-label">Upload</div>
+      <div class="tile-grid">
+        <button class="tile" data-tool="smanim">
+          <span class="tile-icon">📦</span>
+          <span class="tile-label">Stop Motion Upload</span>
+        </button>
+      </div>
+    </div>
+    <div class="tile-section">
+      <div class="tile-section-label">Launch</div>
+      <div class="tile-grid">
+        <button class="tile tile-disabled" data-tool="blender">
+          <span class="tile-icon">🎬</span>
+          <span class="tile-label">Blender</span>
+          <span class="tile-badge">Coming soon</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Placeholder page for a tool that isn't built yet -->
+  <div id="placeholder-screen" class="screen hidden">
+    <div class="placeholder-box">
+      <button id="placeholder-back" class="back-button">⬅ Home</button>
+      <div id="placeholder-text" class="placeholder-text"></div>
+    </div>
+  </div>
+
+  <!-- Stop Motion Upload tool, Stage 2a: nav cascade + read-only folder explorer -->
+  <div id="smanim-screen" class="screen smanim-screen hidden">
+    <div class="smanim-layout">
+
+      <div class="smanim-left">
+        <button id="smanim-back" class="back-button">⬅ Home</button>
+
+        <div class="field-group">
+          <label class="field-label">Project</label>
+          <select id="dd-project" class="field-select"></select>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label">Episode</label>
+          <select id="dd-episode" class="field-select" disabled></select>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label">Sequence</label>
+          <select id="dd-sequence" class="field-select" disabled></select>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label">Shot</label>
+          <select id="dd-shot" class="field-select" disabled></select>
+        </div>
+
+        <label class="checkbox-row">
+          <input type="checkbox" id="show-all-tasks">
+          Show all tasks (greyed out)
+        </label>
+
+        <div id="smanim-note" class="next-note">
+          Pick Project, Episode, Sequence, and Shot to continue.
+        </div>
+      </div>
+
+      <div class="smanim-right">
+        <div id="tree-root" class="tree-root"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
