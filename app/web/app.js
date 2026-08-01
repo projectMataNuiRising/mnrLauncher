@@ -30,6 +30,7 @@ const showAllTasksBox = document.getElementById("show-all-tasks");
 const smanimNote = document.getElementById("smanim-note");
 const smanimBack = document.getElementById("smanim-back");
 const treeRoot = document.getElementById("tree-root");
+const refreshButton = document.getElementById("refresh-button");
 
 const ONBOARDING_URL = "https://docs.projectmatanuirising.com/onboarding/3-pcloud-drive-app";
 
@@ -423,3 +424,11 @@ async function buildLevel(container, pathParts, autoPath) {
 }
 
 window.addEventListener("pywebviewready", runBoot);
+
+refreshButton.addEventListener("click", async () => {
+  refreshButton.disabled = true;
+  refreshButton.textContent = "⏳";
+  // request_refresh closes this window; the installed shell notices
+  // and re-downloads the latest code from GitHub before reopening.
+  await window.pywebview.api.request_refresh();
+});

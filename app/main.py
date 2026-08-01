@@ -22,6 +22,7 @@ Requires (installed into the bundled portable Python, see requirements.txt):
 """
 
 import os
+import sys
 import json
 import time
 import platform
@@ -345,10 +346,29 @@ class MnrApi:
         except Exception as e:
             return {"ok": False, "detail": str(e)}
 
+    # --------------------------------------------------------
+    # Refresh: when this app was launched by the installed bootstrap
+    # shell (which fetches this exact code fresh from GitHub each run),
+    # this closes the window with a special exit code that tells the
+    # shell "re-download the latest code and start me again", instead
+    # of just quitting. If someone runs main.py directly (no shell),
+    # this just closes the window like a normal quit.
+    # --------------------------------------------------------
+
+    def request_refresh(self):
+        _REFRESH_STATE["requested"] = True
+        try:
+            webview.windows[0].destroy()
+        except Exception:
+            pass
+        return {"ok": True}
+
 
 # ------------------------------------------------------------
 # Window bootstrap
 # ------------------------------------------------------------
+
+_REFRESH_STATE = {"requested": False}
 
 def _resolve_index_html():
     here = os.path.dirname(os.path.abspath(__file__))
@@ -366,6 +386,13 @@ def main():
         min_size=(900, 600),
     )
     webview.start()
+
+    # If the Refresh button was used, exit with a code the bootstrap
+    # shell recognizes as "fetch the latest code and run me again"
+    # instead of a normal quit. Running main.py directly (no shell)
+    # just exits normally either way.
+    if _REFRESH_STATE["requested"]:
+        sys.exit(42)
 
 
 if __name__ == "__main__":
