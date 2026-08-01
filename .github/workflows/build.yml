@@ -1,0 +1,39 @@
+name: Build Windows Installer
+
+# This runs automatically on GitHub's own Windows machines every time
+# code is pushed to main, or can be triggered manually from the Actions
+# tab. It compiles bootstrap/launcher.py into one MNR_Launcher.exe,
+# using a clean full Python install (not the stripped-down portable one
+# artists use), since PyInstaller needs the full standard library to
+# build reliably.
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install pywebview pythonnet psutil pyinstaller
+
+      - name: Build the Windows executable
+        run: |
+          pyinstaller --onefile --windowed --name MNR_Launcher bootstrap/launcher.py
+
+      - name: Upload the built .exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: MNR_Launcher-windows
+          path: dist/MNR_Launcher.exe
