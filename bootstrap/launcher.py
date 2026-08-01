@@ -26,6 +26,24 @@ import tempfile
 import urllib.request
 import urllib.error
 
+# ------------------------------------------------------------
+# These imports are NOT used directly in this file. They exist only
+# so PyInstaller's dependency scanner sees them and bundles them into
+# the compiled .exe. main.py (fetched from GitHub at runtime, not
+# visible to PyInstaller at build time) needs all of these. If main.py
+# ever starts using a new library that isn't already imported
+# somewhere in this file, add it here too, or the compiled app will
+# crash with a ModuleNotFoundError for it.
+# ------------------------------------------------------------
+import json          # noqa: F401
+import time          # noqa: F401
+import webview        # noqa: F401
+try:
+    import psutil     # noqa: F401
+except ImportError:
+    pass
+# ------------------------------------------------------------
+
 GITHUB_OWNER = "projectMataNuiRising"
 GITHUB_REPO = "mnrLauncher"
 GITHUB_BRANCH = "main"
