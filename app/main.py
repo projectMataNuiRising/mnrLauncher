@@ -554,7 +554,25 @@ _REFRESH_STATE = {"requested": False}
 
 def _resolve_index_html():
     here = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(here, "web", "index.html")
+    web_dir = os.path.join(here, "web")
+    original_path = os.path.join(web_dir, "index.html")
+
+    # Cache-busting: the WebView engine can cache app.js/style.css by URL
+    # even though the underlying file was just replaced by a fresh GitHub
+    # fetch. Giving each asset a fresh query string every launch forces a
+    # real reload instead of silently serving a stale cached copy.
+    try:
+        with open(original_path, "r", encoding="utf-8") as f:
+            html = f.read()
+        cache_bust = str(int(time.time()))
+        html = html.replace('href="style.css"', f'href="style.css?v={cache_bust}"')
+        html = html.replace('src="app.js"', f'src="app.js?v={cache_bust}"')
+        bust_path = os.path.join(web_dir, "_index_bust.html")
+        with open(bust_path, "w", encoding="utf-8") as f:
+            f.write(html)
+        return bust_path
+    except Exception:
+        return original_path
 
 
 def main():
