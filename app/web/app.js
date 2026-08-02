@@ -47,6 +47,7 @@ const workContent = document.getElementById("work-content");
 const addLayerButton = document.getElementById("add-layer-button");
 const layerStackEl = document.getElementById("layer-stack");
 const uploadButton = document.getElementById("upload-button");
+const uploadHint = document.getElementById("upload-hint");
 const uploadStatus = document.getElementById("upload-status");
 
 // EDIT THIS LIST to add or remove the standard layer name choices
@@ -1037,6 +1038,7 @@ function refreshUploadButtonState() {
   const namedLayers = layers.filter(l => l.name);
 
   let blocked = false;
+  let blockReason = "";
   namedLayers.forEach(layer => {
     ["raw", "jpeg"].forEach(key => {
       const section = layer[key];
@@ -1044,13 +1046,26 @@ function refreshUploadButtonState() {
       const expected = section.expectedFrames;
       if (!expected) return;
       const totalExpected = expected + section.handleFront + section.handleBack;
-      if (section.paths.length !== totalExpected && !section.override) blocked = true;
+      if (section.paths.length !== totalExpected && !section.override) {
+        blocked = true;
+        blockReason = `${layer.name || "a layer"}'s ${key} frame count doesn't match, check the frame count warning or override it.`;
+      }
     });
   });
 
   const ready = shotChosen && namedLayers.length > 0 && !blocked;
   uploadButton.disabled = !ready;
   uploadButton.classList.toggle("ready", ready);
+
+  if (ready) {
+    uploadHint.textContent = "";
+  } else if (!shotChosen) {
+    uploadHint.textContent = "Pick Project, Episode, Sequence, and Shot above first.";
+  } else if (namedLayers.length === 0) {
+    uploadHint.textContent = "Add a layer and pick a character name before uploading.";
+  } else if (blocked) {
+    uploadHint.textContent = blockReason;
+  }
 }
 
 function buildBaseName(layer) {
