@@ -529,6 +529,12 @@ body {
   font-style: italic;
 }
 
+.tree-name.tree-pending {
+  color: var(--green);
+  font-style: italic;
+  font-weight: 600;
+}
+
 .tree-name.tree-missing {
   color: var(--muted);
   font-style: italic;
@@ -850,7 +856,7 @@ body {
 
 .file-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 6px;
   font-size: 12px;
@@ -862,9 +868,9 @@ body {
 }
 
 .file-item-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .file-item-remove {

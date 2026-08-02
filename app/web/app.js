@@ -397,10 +397,71 @@ function currentAutoPath() {
   return parts;
 }
 
+let treeRefreshGeneration = 0;
+
 async function refreshTree() {
+  const myGeneration = ++treeRefreshGeneration;
   treeRoot.innerHTML = "";
   const autoPath = currentAutoPath();
-  await buildLevel(treeRoot, [], autoPath);
+  const pendingMap = computePendingMap();
+  await buildLevel(treeRoot, [], autoPath, pendingMap, myGeneration);
+}
+
+// Figures out exactly where every currently-selected (but not yet
+// uploaded) file will land, keyed by the joined folder path, so the
+// tree can show them in place, italic green, before Upload is clicked.
+function computePendingMap() {
+  const map = {};
+  const shotPath = currentAutoPath();
+  if (shotPath.length !== 5) return map;
+
+  const mediaPath = shotPath.concat(["smAnim", "export", "publish", "media"]);
+  const mediaKey = mediaPath.join("/");
+
+  function addPending(key, name, isDir) {
+    if (!map[key]) map[key] = [];
+    if (!map[key].some(e => e.name === name)) map[key].push({ name, isDir });
+  }
+
+  layers.filter(l => l.name).forEach(layer => {
+    const baseName = buildBaseName(layer);
+
+    if (layer.mp4.enabled && layer.mp4.path) {
+      const ext = layer.mp4.path.match(/\.[^.]+$/)?.[0] || ".mp4";
+      addPending(mediaKey, `${baseName}${ext}`, false);
+    }
+
+    ["raw", "jpeg"].forEach(key => {
+      const section = layer[key];
+      if (section.enabled && section.paths.length > 0) {
+        const ext = getExtension(section.paths[0]) || key;
+        addPending(mediaKey, baseName, true);
+        const baseFolderKey = mediaPath.concat([baseName]).join("/");
+        addPending(baseFolderKey, ext, true);
+        const extFolderKey = mediaPath.concat([baseName, ext]).join("/");
+        const start = 1001 - sharedFrameSettings.handleFront;
+        section.paths.forEach((p, i) => {
+          const frameExt = p.match(/\.[^.]+$/)?.[0] || "";
+          addPending(extFolderKey, `${baseName}.${String(start + i).padStart(4, "0")}${frameExt}`, false);
+        });
+      }
+    });
+
+    if (layer.productionData.enabled && layer.productionData.paths.length > 0) {
+      const prodFolderName = `${baseName}-productionData`;
+      addPending(mediaKey, prodFolderName, true);
+      const prodKey = mediaPath.concat([prodFolderName]).join("/");
+      layer.productionData.paths.forEach(p => {
+        addPending(prodKey, p.split(/[\\/]/).pop(), false);
+      });
+    }
+  });
+
+  return map;
+}
+
+function pathHasPendingDescendant(pathKey, pendingMap) {
+  return Object.keys(pendingMap).some(k => k === pathKey || k.startsWith(pathKey + "/"));
 }
 
 const TREE_FOLDER_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6z"/></svg>';
@@ -434,12 +495,23 @@ function makeRow(name, isDir, depth) {
 // dropdowns (once all 4 are picked, this is exactly 5 segments long,
 // counting the literal "03-shot" folder). When pathParts reaches that
 // same length, we are listing the shot folder's own children, which is
-// where the smAnim-only task filter applies.
-async function buildLevel(container, pathParts, autoPath) {
+// where the smAnim-only task filter applies. pendingMap holds files
+// that are selected but not yet uploaded, so they still show up (in
+// italic green) even though they don't exist on disk yet.
+async function buildLevel(container, pathParts, autoPath, pendingMap, generation) {
   const applyTaskFilter = autoPath.length === 5 && pathParts.length === 5;
+  const pathKey = pathParts.join("/");
+  const pendingHere = pendingMap[pathKey] || [];
 
   const result = await window.pywebview.api.list_dir_entries(pathParts, false);
-  if (!result.ok) {
+  if (generation !== treeRefreshGeneration) return; // a newer refresh already started, abandon this one
+
+  let items;
+  if (result.ok) {
+    items = result.items;
+  } else if (pendingHere.length > 0) {
+    items = []; // folder doesn't exist yet, but pending content will create it
+  } else {
     const msg = document.createElement("div");
     msg.className = "tree-name tree-missing";
     msg.textContent = pathParts.length === 0 ? "(could not read 01-projects)" : "(does not exist yet)";
@@ -447,7 +519,6 @@ async function buildLevel(container, pathParts, autoPath) {
     return;
   }
 
-  let items = result.items;
   if (applyTaskFilter) {
     const smanimItems = items.filter(i => i.name === "smAnim");
     const otherItems = items
@@ -463,11 +534,20 @@ async function buildLevel(container, pathParts, autoPath) {
     }
   }
 
+  const existingNames = new Set(items.map(i => i.name));
+  pendingHere.forEach(p => {
+    if (!existingNames.has(p.name)) {
+      items.push({ name: p.name, is_dir: p.isDir, _pending: true });
+    }
+  });
+
   for (const item of items) {
     const nextParts = pathParts.concat(item.name);
+    const nextKey = nextParts.join("/");
     const depth = pathParts.length;
     const { row, toggle, label } = makeRow(item.name, item.is_dir, depth);
     if (item._greyed) label.classList.add("tree-greyed");
+    if (item._pending) label.classList.add("tree-pending");
     container.appendChild(row);
 
     let childrenContainer = null;
@@ -477,27 +557,30 @@ async function buildLevel(container, pathParts, autoPath) {
       if (!childrenContainer) {
         childrenContainer = document.createElement("div");
         childrenContainer.className = "tree-children";
-        container.appendChild(childrenContainer);
+        row.insertAdjacentElement("afterend", childrenContainer);
       }
       expanded = !expanded;
       toggle.textContent = expanded ? "▼" : "▶";
       childrenContainer.style.display = expanded ? "block" : "none";
       if (expanded && childrenContainer.childElementCount === 0) {
-        await buildLevel(childrenContainer, nextParts, autoPath);
+        await buildLevel(childrenContainer, nextParts, autoPath, pendingMap, generation);
       }
     }
 
-    row.addEventListener("click", () => {
-      if (item.is_dir) doExpand();
-    });
-    row.addEventListener("dblclick", async () => {
-      const res = await window.pywebview.api.open_path(nextParts);
-      if (!res.ok) console.error("open_path failed", res.detail);
-    });
+    if (item.is_dir) {
+      row.addEventListener("click", () => doExpand());
+    }
+    if (!item._pending) {
+      row.addEventListener("dblclick", async () => {
+        const res = await window.pywebview.api.open_path(nextParts);
+        if (!res.ok) console.error("open_path failed", res.detail);
+      });
+    }
 
     const shouldAutoExpand =
       (item.is_dir && pathParts.length < autoPath.length && item.name === autoPath[pathParts.length]) ||
-      (applyTaskFilter && item.name === "smAnim");
+      (applyTaskFilter && item.name === "smAnim") ||
+      (item.is_dir && pathHasPendingDescendant(nextKey, pendingMap));
 
     if (shouldAutoExpand) {
       await doExpand();
@@ -1026,7 +1109,10 @@ function buildSingleFileSection(layer, key, title) {
       state.path = null;
       refresh();
       refreshUploadButtonState();
-    }, i => `${layer.name || "layer"}${layer.number}-${layer.variant}_${layer.version}${state.path ? (state.path.match(/\.[^.]+$/)?.[0] || "") : ""}`);
+    }, () => {
+      const ext = state.path ? (state.path.match(/\.[^.]+$/)?.[0] || "") : "";
+      return `${buildBaseName(layer)}${ext}`;
+    });
   }
 
   refresh();
@@ -1155,7 +1241,8 @@ function buildSequenceSection(layer, key, title, kind) {
       refresh();
     }, i => {
       const start = 1001 - sharedFrameSettings.handleFront;
-      return `...${key}.${String(start + i).padStart(4, "0")}`;
+      const frameExt = state.paths[i] ? (state.paths[i].match(/\.[^.]+$/)?.[0] || "") : "";
+      return `${buildBaseName(layer)}.${String(start + i).padStart(4, "0")}${frameExt}`;
     });
     updateTypeCheck();
     updateFrameCheck();
@@ -1185,6 +1272,8 @@ function buildSequenceSection(layer, key, title, kind) {
 function refreshUploadButtonState() {
   const shotChosen = currentAutoPath().length === 5;
   const namedLayers = layers.filter(l => l.name);
+
+  refreshTree();
 
   let blocked = false;
   let blockReason = "";
