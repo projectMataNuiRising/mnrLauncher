@@ -83,12 +83,18 @@ body {
   color: var(--text);
 }
 
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .status-pill {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 6px 14px;
-  border-radius: 999px;
+  border-radius: var(--radius);
   font-weight: 500;
   font-size: 13px;
   border: 1px solid var(--border);

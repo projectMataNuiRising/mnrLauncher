@@ -68,7 +68,7 @@ async function pollTransferActivity() {
     if (result.state === "busy") {
       setStatusPill("busy", "Transfers in progress, do not disconnect pCloud");
     } else if (result.state === "idle") {
-      setStatusPill("ok", "pCloud all clear");
+      setStatusPill("ok", "pCloud - Everything is Up To Date");
     } else {
       setStatusPill("ok", "pCloud connected");
     }
@@ -112,7 +112,7 @@ async function runBoot() {
   await wait(350);
 
   topbar.classList.remove("hidden");
-  setStatusPill("ok", "pCloud all clear");
+  setStatusPill("ok", "pCloud - Everything is Up To Date");
   pollTransferActivity();
   setInterval(pollTransferActivity, 20000);
 
