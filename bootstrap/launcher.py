@@ -63,6 +63,60 @@ except ImportError:
 # self-update check below only ever runs in a compiled build anyway.
 SHELL_VERSION = "0.0.0-dev"
 
+
+def is_running_from_cloud_drive():
+    """
+    Checks whether this exe is currently running from inside the
+    pCloud Drive mount (P:\\ on Windows, ~/pCloud Drive on Mac) instead
+    of a normal local folder. Running the installed shell itself from
+    the synced drive is exactly what NOT to do: the self-update
+    mechanism deletes and replaces this exe file, and if several
+    people are all pointed at that same shared file, that swap can
+    fail, collide, or corrupt things for everyone. Only project files
+    belong on pCloud, this app itself should live locally.
+    """
+    if not getattr(sys, "frozen", False):
+        return False
+    try:
+        exe_path = os.path.abspath(sys.executable)
+    except Exception:
+        return False
+
+    system = platform.system()
+    if system == "Windows":
+        return exe_path[:2].upper() == "P:"
+    if system == "Darwin":
+        return "pcloud drive" in exe_path.lower()
+    return False
+
+
+def warn_and_exit_if_on_cloud_drive():
+    if not is_running_from_cloud_drive():
+        return
+    message = (
+        "MNR Launcher is running from inside your pCloud Drive.\n\n"
+        "Please copy this file to your Desktop (or anywhere else on "
+        "your own computer) and run it from there instead.\n\n"
+        "Running it directly from pCloud can break auto-updates and "
+        "cause conflicts with other users sharing that same file.\n\n"
+        "This will now close."
+    )
+    try:
+        if platform.system() == "Windows":
+            import ctypes
+            MB_ICONWARNING = 0x30
+            ctypes.windll.user32.MessageBoxW(0, message, "MNR Launcher", MB_ICONWARNING)
+        elif platform.system() == "Darwin":
+            safe_message = message.replace('"', '\\"')
+            os.system(
+                f'osascript -e \'display dialog "{safe_message}" '
+                f'with title "MNR Launcher" buttons {{"OK"}} default button "OK" '
+                f'with icon caution\''
+            )
+    except Exception:
+        pass
+    sys.exit(1)
+
 GITHUB_OWNER = "projectMataNuiRising"
 GITHUB_REPO = "mnrLauncher"
 GITHUB_BRANCH = "main"
@@ -248,18 +302,23 @@ def check_and_apply_shell_update(status_callback=None):
 def _spawn_update_relay(current_exe, new_exe_path):
     """
     Writes a small VBScript that waits for this process to fully exit
-    (Windows can't overwrite an exe that's still running), then swaps
-    the new file into place and relaunches it. Retries the swap a few
-    times with short gaps, since a single fixed wait isn't always
-    enough, either this process taking a moment longer to fully let go
-    of the file, or Windows/antivirus briefly touching the freshly
-    written one. Runs with zero visible window, same trick as
+    (Windows can't overwrite an exe that's still running), swaps the
+    new file into place, then relaunches it. Retries the swap a few
+    times with short gaps, and after launching, actually checks that
+    the new process is really running and retries the launch itself if
+    not, since a brand new unsigned exe often gets briefly held up by
+    antivirus real-time scanning on its very first run right after
+    being written, which shows up as a misleading "Failed to load
+    Python DLL" error rather than anything actually wrong with the
+    build. Runs with zero visible window, same trick as
     mnr_launch_relay.vbs.
     """
+    exe_name = os.path.basename(current_exe)
     relay_path = os.path.join(tempfile.gettempdir(), "mnr_shell_update_relay.vbs")
     script_lines = [
         'Set objShell = CreateObject("WScript.Shell")',
         'Set objFSO = CreateObject("Scripting.FileSystemObject")',
+        'Set objWMI = GetObject("winmgmts:\\\\.\\root\\cimv2")',
         "WScript.Sleep 3000",
         "swapped = False",
         "For attempt = 1 To 6",
@@ -274,8 +333,21 @@ def _spawn_update_relay(current_exe, new_exe_path):
         "  If swapped Then Exit For",
         "  WScript.Sleep 1500",
         "Next",
-        "WScript.Sleep 500",
-        f'objShell.Run Chr(34) & "{current_exe}" & Chr(34), 0, False',
+        # Give antivirus real-time scanning a real chance to clear the
+        # freshly written file before the first execution attempt.
+        "WScript.Sleep 4000",
+        f'exeName = "{exe_name}"',
+        "launched = False",
+        "For launchAttempt = 1 To 3",
+        f'  objShell.Run Chr(34) & "{current_exe}" & Chr(34), 0, False',
+        "  WScript.Sleep 2500",
+        "  Set colProcesses = objWMI.ExecQuery(\"Select * from Win32_Process Where Name = '\" & exeName & \"'\")",
+        "  If colProcesses.Count > 0 Then",
+        "    launched = True",
+        "    Exit For",
+        "  End If",
+        "  WScript.Sleep 2000",
+        "Next",
     ]
     with open(relay_path, "w", encoding="utf-8") as f:
         f.write("\n".join(script_lines))
@@ -284,6 +356,8 @@ def _spawn_update_relay(current_exe, new_exe_path):
 
 
 def main():
+    warn_and_exit_if_on_cloud_drive()
+
     cache_dir = get_cache_dir()
 
     # Fresh log each launch, main.py reads this on startup so a Debug
