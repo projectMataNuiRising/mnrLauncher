@@ -27,6 +27,7 @@ import json
 import time
 import shutil
 import platform
+import webbrowser
 
 import webview
 
@@ -424,6 +425,16 @@ class MnrApi:
     def log_frontend_error(self, msg):
         _log(f"[frontend error] {msg}")
         return {"ok": True}
+
+    def open_url(self, url):
+        """Opens a URL in the user's default browser, for Launch tiles
+        that point at external sites (Kitsu, docs, etc)."""
+        try:
+            webbrowser.open(url)
+            _log(f"open_url: {url}")
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "detail": str(e)}
 
     # --------------------------------------------------------
     # File browsing (native OS picker, since a webview cannot read the
