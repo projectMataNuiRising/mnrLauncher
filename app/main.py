@@ -83,6 +83,52 @@ def get_local_state_path():
     return os.path.join(get_local_state_dir(), "state.json")
 
 
+def get_shell_cache_dir():
+    """
+    Must compute the SAME path as bootstrap/launcher.py's get_cache_dir().
+    That is where the installed shell caches the fetched app/ code AND
+    writes its boot log, this lets us read that log once this app starts,
+    to see whether the GitHub fetch actually succeeded on this launch.
+    """
+    system = platform.system()
+    if system == "Windows":
+        base = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
+    elif system == "Darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    else:
+        base = os.path.expanduser("~/.cache")
+    return os.path.join(base, "MNR_Launcher", "app_cache")
+
+
+_DEBUG_LOG = []
+
+
+def _log(msg):
+    timestamp = time.strftime("%H:%M:%S")
+    _DEBUG_LOG.append(f"[{timestamp}] {msg}")
+    if len(_DEBUG_LOG) > 500:
+        del _DEBUG_LOG[:100]
+
+
+def _load_shell_boot_log():
+    """Pulls in whatever the installed shell logged before this app even
+    opened, most importantly whether the GitHub code fetch succeeded."""
+    try:
+        boot_log_path = os.path.join(get_shell_cache_dir(), "boot_log.txt")
+        if os.path.isfile(boot_log_path):
+            with open(boot_log_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        _DEBUG_LOG.append(line)
+    except Exception as e:
+        _DEBUG_LOG.append(f"Could not read the shell's boot log: {e}")
+
+
+_load_shell_boot_log()
+_log("main.py started")
+
+
 # ------------------------------------------------------------
 # Local state (per machine, not shared on the network drive)
 # ------------------------------------------------------------
@@ -174,6 +220,7 @@ class MnrApi:
         found = os.path.isdir(root)
         projects_ok = found and os.path.isdir(os.path.join(root, "01-projects"))
         ok = bool(found and projects_ok)
+        _log(f"check_drive: root={root} ok={ok}")
         return {
             "ok": ok,
             "root": root,
@@ -276,13 +323,17 @@ class MnrApi:
         """Dropdown 1: folder names directly under 01-projects."""
         root = get_pcloud_root()
         base = os.path.join(root, "01-projects")
-        return self._list_folder_names(base)
+        result = self._list_folder_names(base)
+        _log(f"list_projects: {len(result.get('items', []))} found, ok={result['ok']}")
+        return result
 
     def list_episodes(self, project):
         """Dropdown 2: folder names under {project}\\03-shot."""
         root = get_pcloud_root()
         base = os.path.join(root, "01-projects", project, "03-shot")
-        return self._list_folder_names(base)
+        result = self._list_folder_names(base)
+        _log(f"list_episodes({project}): {len(result.get('items', []))} found, ok={result['ok']}")
+        return result
 
     def list_children(self, relative_parts):
         """
@@ -292,7 +343,9 @@ class MnrApi:
         """
         root = get_pcloud_root()
         base = os.path.join(root, "01-projects", *relative_parts)
-        return self._list_folder_names(base)
+        result = self._list_folder_names(base)
+        _log(f"list_children({'/'.join(relative_parts)}): {len(result.get('items', []))} found, ok={result['ok']}")
+        return result
 
     # --------------------------------------------------------
     # Read-only folder explorer (right side panel). Lazy-loaded: the
@@ -357,12 +410,16 @@ class MnrApi:
     # --------------------------------------------------------
 
     def request_refresh(self):
+        _log("Refresh requested by user")
         _REFRESH_STATE["requested"] = True
         try:
             webview.windows[0].destroy()
         except Exception:
             pass
         return {"ok": True}
+
+    def get_debug_log(self):
+        return {"lines": list(_DEBUG_LOG)}
 
     # --------------------------------------------------------
     # File browsing (native OS picker, since a webview cannot read the
@@ -380,9 +437,12 @@ class MnrApi:
                 allow_multiple=multiple,
             )
             if not result:
+                _log("browse_files: cancelled, nothing chosen")
                 return {"ok": True, "paths": []}
+            _log(f"browse_files: {len(result)} file(s) chosen")
             return {"ok": True, "paths": list(result)}
         except Exception as e:
+            _log(f"browse_files failed: {e}")
             return {"ok": False, "detail": str(e)}
 
     def upload_layer_publish(self, payload):
@@ -407,9 +467,11 @@ class MnrApi:
             )
             os.makedirs(media_dir, exist_ok=True)
         except Exception as e:
+            _log(f"upload_layer_publish: could not prepare media folder: {e}")
             return {"ok": False, "detail": f"Could not prepare the media folder: {e}"}
 
         base_name = payload["base_name"]
+        _log(f"upload_layer_publish: starting {base_name}")
         results = {}
 
         # ---- mp4 / mov preview (single file) ----
@@ -449,6 +511,7 @@ class MnrApi:
             except Exception as e:
                 results["production_data"] = {"ok": False, "detail": str(e)}
 
+        _log(f"upload_layer_publish: finished {base_name}: {results}")
         return {"ok": True, "results": results}
 
     def _copy_frame_sequence(self, media_dir, base_name, section):
