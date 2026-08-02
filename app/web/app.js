@@ -224,6 +224,8 @@ document.querySelectorAll(".tile").forEach(tile => {
     if (tool === "smanim") {
       showScreen("smanim");
       initSmanimScreen();
+    } else if (tool === "external" && tile.dataset.url) {
+      window.pywebview.api.open_url(tile.dataset.url);
     }
   });
 });
