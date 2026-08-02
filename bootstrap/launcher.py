@@ -23,6 +23,7 @@ import zipfile
 import platform
 import runpy
 import tempfile
+import subprocess
 import urllib.request
 import urllib.error
 
@@ -42,12 +43,31 @@ try:
     import psutil     # noqa: F401
 except ImportError:
     pass
+try:
+    import requests   # noqa: F401  -- pre-bundled for future Kitsu API use
+except ImportError:
+    pass
+try:
+    from PIL import Image  # noqa: F401  -- pre-bundled for future image/thumbnail work
+except ImportError:
+    pass
+try:
+    import send2trash  # noqa: F401  -- pre-bundled for safer "delete original" later
+except ImportError:
+    pass
 # ------------------------------------------------------------
+
+# Replaced with a real build number by the GitHub Actions workflow at
+# compile time. Stays as this placeholder when just running
+# `python launcher.py` directly for local testing, which is fine, the
+# self-update check below only ever runs in a compiled build anyway.
+SHELL_VERSION = "0.0.0-dev"
 
 GITHUB_OWNER = "projectMataNuiRising"
 GITHUB_REPO = "mnrLauncher"
 GITHUB_BRANCH = "main"
 ZIP_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/archive/refs/heads/{GITHUB_BRANCH}.zip"
+LATEST_RELEASE_API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
 
 # Special exit code main.py uses to mean "refetch and run me again"
 # (set when the user clicks the Refresh button), instead of a normal quit.
@@ -164,6 +184,91 @@ def _append_boot_log(cache_dir, msg):
         pass
 
 
+def check_and_apply_shell_update(status_callback=None):
+    """
+    Checks the latest GitHub Release for a newer compiled shell than
+    this one. If found, downloads the new .exe and arranges for it to
+    replace this running one and relaunch, once this process exits.
+    Only does anything when actually running as a compiled PyInstaller
+    build, plain `python launcher.py` for local testing never self-updates.
+    Returns True if an update was found and is being applied (caller
+    should exit right after), False otherwise.
+    """
+    def report(msg):
+        if status_callback:
+            status_callback(msg)
+        else:
+            print(f"[MNR] {msg}")
+
+    if not getattr(sys, "frozen", False):
+        return False
+
+    try:
+        req = urllib.request.Request(
+            LATEST_RELEASE_API_URL,
+            headers={"Accept": "application/vnd.github+json"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            release = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        report(f"Could not check for a shell update ({e}), skipping.")
+        return False
+
+    latest_tag = (release.get("tag_name") or "").lstrip("v")
+    if not latest_tag or latest_tag == SHELL_VERSION:
+        report(f"Shell is up to date (v{SHELL_VERSION}).")
+        return False
+
+    asset_url = None
+    for asset in release.get("assets", []):
+        if asset.get("name", "").lower().endswith(".exe"):
+            asset_url = asset.get("browser_download_url")
+            break
+
+    if not asset_url:
+        report(f"Newer shell v{latest_tag} found but it has no .exe attached, skipping.")
+        return False
+
+    report(f"Newer shell version available (v{latest_tag}), downloading...")
+
+    current_exe = sys.executable
+    new_exe_path = current_exe + ".new"
+
+    try:
+        urllib.request.urlretrieve(asset_url, new_exe_path)
+    except Exception as e:
+        report(f"Shell update download failed ({e}), continuing with current version.")
+        return False
+
+    report("Update downloaded, restarting...")
+    _spawn_update_relay(current_exe, new_exe_path)
+    return True
+
+
+def _spawn_update_relay(current_exe, new_exe_path):
+    """
+    Writes a small VBScript that waits a couple seconds for this process
+    to fully exit (Windows can't overwrite an exe that's still running),
+    then swaps the new file into place and relaunches it. Runs with zero
+    visible window, same trick as mnr_launch_relay.vbs.
+    """
+    relay_path = os.path.join(tempfile.gettempdir(), "mnr_shell_update_relay.vbs")
+    script_lines = [
+        'Set objShell = CreateObject("WScript.Shell")',
+        'Set objFSO = CreateObject("Scripting.FileSystemObject")',
+        "WScript.Sleep 2000",
+        "On Error Resume Next",
+        f'objFSO.DeleteFile "{current_exe}", True',
+        f'objFSO.MoveFile "{new_exe_path}", "{current_exe}"',
+        "On Error Goto 0",
+        f'objShell.Run Chr(34) & "{current_exe}" & Chr(34), 0, False',
+    ]
+    with open(relay_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(script_lines))
+
+    subprocess.Popen(["wscript.exe", relay_path])
+
+
 def main():
     cache_dir = get_cache_dir()
 
@@ -172,12 +277,17 @@ def main():
     # this whole phase happens before the window even opens.
     try:
         with open(get_boot_log_path(cache_dir), "w", encoding="utf-8") as f:
-            f.write(f"[{time.strftime('%H:%M:%S')}] MNR Launcher shell starting...\n")
+            f.write(f"[{time.strftime('%H:%M:%S')}] MNR Launcher shell starting (v{SHELL_VERSION})...\n")
     except Exception:
         pass
 
     def log(msg):
         _append_boot_log(cache_dir, msg)
+
+    if check_and_apply_shell_update(status_callback=log):
+        return  # a newer .exe is about to take over, this process is done
+
+    os.environ["MNR_SHELL_VERSION"] = SHELL_VERSION
 
     while True:
         fetch_latest_app(cache_dir, status_callback=log)
