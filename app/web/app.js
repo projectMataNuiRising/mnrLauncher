@@ -23,6 +23,7 @@ const userList = document.getElementById("user-list");
 const placeholderText = document.getElementById("placeholder-text");
 const placeholderBack = document.getElementById("placeholder-back");
 const onboardingLink = document.getElementById("onboarding-link");
+const versionBadge = document.getElementById("version-badge");
 
 const ddProject = document.getElementById("dd-project");
 const ddEpisode = document.getElementById("dd-episode");
@@ -133,6 +134,10 @@ async function pollTransferActivity() {
 
 async function runBoot() {
   onboardingLink.href = ONBOARDING_URL;
+
+  window.pywebview.api.get_app_info().then(info => {
+    versionBadge.textContent = `v${info.shell_version}`;
+  });
 
   addBootLine("Checking pCloud Drive...", "info");
   await wait(250);

@@ -39,6 +39,16 @@ body {
 
 .icon svg { width: 100%; height: 100%; }
 
+.version-badge {
+  position: fixed;
+  bottom: 8px;
+  right: 12px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.35);
+  z-index: 10;
+  pointer-events: none;
+}
+
 /* ---------------- Top bar ---------------- */
 
 .topbar {
