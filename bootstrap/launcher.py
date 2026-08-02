@@ -247,20 +247,34 @@ def check_and_apply_shell_update(status_callback=None):
 
 def _spawn_update_relay(current_exe, new_exe_path):
     """
-    Writes a small VBScript that waits a couple seconds for this process
-    to fully exit (Windows can't overwrite an exe that's still running),
-    then swaps the new file into place and relaunches it. Runs with zero
-    visible window, same trick as mnr_launch_relay.vbs.
+    Writes a small VBScript that waits for this process to fully exit
+    (Windows can't overwrite an exe that's still running), then swaps
+    the new file into place and relaunches it. Retries the swap a few
+    times with short gaps, since a single fixed wait isn't always
+    enough, either this process taking a moment longer to fully let go
+    of the file, or Windows/antivirus briefly touching the freshly
+    written one. Runs with zero visible window, same trick as
+    mnr_launch_relay.vbs.
     """
     relay_path = os.path.join(tempfile.gettempdir(), "mnr_shell_update_relay.vbs")
     script_lines = [
         'Set objShell = CreateObject("WScript.Shell")',
         'Set objFSO = CreateObject("Scripting.FileSystemObject")',
-        "WScript.Sleep 2000",
-        "On Error Resume Next",
-        f'objFSO.DeleteFile "{current_exe}", True',
-        f'objFSO.MoveFile "{new_exe_path}", "{current_exe}"',
-        "On Error Goto 0",
+        "WScript.Sleep 3000",
+        "swapped = False",
+        "For attempt = 1 To 6",
+        "  On Error Resume Next",
+        "  Err.Clear",
+        f'  objFSO.DeleteFile "{current_exe}", True',
+        "  didDelete = (Err.Number = 0)",
+        "  Err.Clear",
+        f'  If didDelete Then objFSO.MoveFile "{new_exe_path}", "{current_exe}"',
+        "  If didDelete And Err.Number = 0 Then swapped = True",
+        "  On Error Goto 0",
+        "  If swapped Then Exit For",
+        "  WScript.Sleep 1500",
+        "Next",
+        "WScript.Sleep 500",
         f'objShell.Run Chr(34) & "{current_exe}" & Chr(34), 0, False',
     ]
     with open(relay_path, "w", encoding="utf-8") as f:
