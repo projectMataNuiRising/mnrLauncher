@@ -32,6 +32,10 @@ const smanimNote = document.getElementById("smanim-note");
 const smanimBack = document.getElementById("smanim-back");
 const treeRoot = document.getElementById("tree-root");
 const refreshButton = document.getElementById("refresh-button");
+const debugToggle = document.getElementById("debug-toggle");
+const debugPanel = document.getElementById("debug-panel");
+const debugLogEl = document.getElementById("debug-log");
+let debugPollInterval = null;
 const exportEnabled = document.getElementById("export-enabled");
 const exportContent = document.getElementById("export-content");
 const exportType = document.getElementById("export-type");
@@ -42,6 +46,9 @@ const workEnabled = document.getElementById("work-enabled");
 const workContent = document.getElementById("work-content");
 const addLayerButton = document.getElementById("add-layer-button");
 const layerStackEl = document.getElementById("layer-stack");
+const uploadButton = document.getElementById("upload-button");
+const uploadHint = document.getElementById("upload-hint");
+const uploadStatus = document.getElementById("upload-status");
 
 // EDIT THIS LIST to add or remove the standard layer name choices
 // shown in each layer box's dropdown.
@@ -60,6 +67,22 @@ const ONBOARDING_URL = "https://docs.projectmatanuirising.com/onboarding/3-pclou
 let allUsers = [];
 let currentUser = null;
 let showAllTasksChecked = false;
+
+// Global error capture: if something breaks in the frontend, report it
+// into the same debug log as the backend instead of failing silently
+// with nothing visible anywhere.
+function reportFrontendError(msg) {
+  console.error(msg);
+  if (window.pywebview && window.pywebview.api && window.pywebview.api.log_frontend_error) {
+    window.pywebview.api.log_frontend_error(String(msg)).catch(() => {});
+  }
+}
+window.addEventListener("error", event => {
+  reportFrontendError(`${event.message} (${event.filename}:${event.lineno})`);
+});
+window.addEventListener("unhandledrejection", event => {
+  reportFrontendError(`Unhandled promise rejection: ${event.reason}`);
+});
 
 function showScreen(name) {
   Object.values(screens).forEach(s => s.classList.add("hidden"));
@@ -245,6 +268,7 @@ async function initSmanimScreen() {
   workContent.classList.add("hidden");
   layers.length = 0;
   renderLayerStack();
+  uploadStatus.innerHTML = "";
 
   const result = await window.pywebview.api.list_projects();
   if (result.ok) {
@@ -332,6 +356,7 @@ ddShot.addEventListener("change", async () => {
     ? "Showing the smAnim folder for this shot below."
     : "Pick Project, Episode, Sequence, and Shot to continue.";
   await refreshTree();
+  refreshUploadButtonState();
 });
 
 showAllTasksBox.addEventListener("change", async () => {
@@ -473,6 +498,28 @@ refreshButton.addEventListener("click", async () => {
   await window.pywebview.api.request_refresh();
 });
 
+async function refreshDebugLog() {
+  try {
+    const result = await window.pywebview.api.get_debug_log();
+    const wasScrolledToBottom = debugLogEl.scrollHeight - debugLogEl.scrollTop <= debugLogEl.clientHeight + 20;
+    debugLogEl.textContent = result.lines.join("\n");
+    if (wasScrolledToBottom) debugLogEl.scrollTop = debugLogEl.scrollHeight;
+  } catch (e) {
+    debugLogEl.textContent = "Could not reach the debug log: " + e;
+  }
+}
+
+debugToggle.addEventListener("change", () => {
+  debugPanel.classList.toggle("hidden", !debugToggle.checked);
+  if (debugToggle.checked) {
+    refreshDebugLog();
+    debugPollInterval = setInterval(refreshDebugLog, 1500);
+  } else if (debugPollInterval) {
+    clearInterval(debugPollInterval);
+    debugPollInterval = null;
+  }
+});
+
 // ---------------------------------------------------------------
 // Export / Work toggle sections
 // ---------------------------------------------------------------
@@ -498,7 +545,13 @@ exportType.addEventListener("change", () => {
 
 addLayerButton.addEventListener("click", () => {
   const id = "layer-" + (++layerIdCounter);
-  layers.push({ id, name: "", number: "01", variant: "main", version: "" });
+  layers.push({
+    id, name: "", number: "01", variant: "main", version: "",
+    mp4: { enabled: true, path: null },
+    raw: { enabled: true, paths: [], handleFront: 0, handleBack: 0, expectedFrames: null, override: false },
+    jpeg: { enabled: true, paths: [], handleFront: 0, handleBack: 0, expectedFrames: null, override: false },
+    productionData: { enabled: false, paths: [] },
+  });
   renderLayerStack();
 });
 
@@ -653,6 +706,13 @@ function renderLayerStack() {
     body.appendChild(note);
 
     box.appendChild(body);
+
+    // ---- upload sections: mp4, raw sequence, jpeg sequence, productionData ----
+    body.appendChild(buildSingleFileSection(layer, "mp4", "MP4 / MOV Preview"));
+    body.appendChild(buildSequenceSection(layer, "raw", "Raw Image Sequence"));
+    body.appendChild(buildSequenceSection(layer, "jpeg", "JPEG Image Sequence"));
+    body.appendChild(buildMultiFileSection(layer, "productionData", "Production Data (optional)"));
+
     layerStackEl.appendChild(box);
 
     // ---- wire up interactions ----
@@ -685,10 +745,390 @@ function renderLayerStack() {
       variantInput.disabled = !layer.name;
       versionSelect.disabled = !layer.name;
       if (layer.name) await refreshLayerVersionOptions(layer, versionSelect);
+      refreshUploadButtonState();
     });
 
     if (layer.name) {
       refreshLayerVersionOptions(layer, versionSelect);
     }
   });
+
+  refreshUploadButtonState();
+}
+
+// ---------------------------------------------------------------
+// Per-layer upload section builders. All three share the same basic
+// shape (checkbox to enable, a Browse button, a list of chosen files
+// shown in pastel green italic like a preview of what will upload),
+// raw/jpeg add handle inputs and frame-count validation on top.
+// ---------------------------------------------------------------
+
+function buildSectionShell(title, enabled, onToggle) {
+  const wrap = document.createElement("div");
+  wrap.className = "upload-section";
+
+  const header = document.createElement("label");
+  header.className = "upload-section-header";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = enabled;
+  const titleSpan = document.createElement("span");
+  titleSpan.textContent = title;
+  header.appendChild(checkbox);
+  header.appendChild(titleSpan);
+  wrap.appendChild(header);
+
+  const sectionBody = document.createElement("div");
+  sectionBody.className = "upload-section-body";
+  sectionBody.classList.toggle("hidden", !enabled);
+  wrap.appendChild(sectionBody);
+
+  checkbox.addEventListener("change", () => {
+    sectionBody.classList.toggle("hidden", !checkbox.checked);
+    onToggle(checkbox.checked);
+    refreshUploadButtonState();
+  });
+
+  return { wrap, sectionBody };
+}
+
+function renderFileList(container, items, onRemove, renamePreview) {
+  container.innerHTML = "";
+  if (items.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "file-list-empty";
+    empty.textContent = "No files selected yet.";
+    container.appendChild(empty);
+    return;
+  }
+  items.forEach((path, i) => {
+    const row = document.createElement("div");
+    row.className = "file-item";
+    const name = document.createElement("span");
+    name.className = "file-item-name";
+    const originalName = path.split(/[\\/]/).pop();
+    name.textContent = renamePreview ? `${originalName} \u2192 ${renamePreview(i)}` : originalName;
+    name.title = name.textContent;
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "file-item-remove";
+    removeBtn.textContent = "\u00d7";
+    removeBtn.addEventListener("click", () => onRemove(i));
+    row.appendChild(name);
+    row.appendChild(removeBtn);
+    container.appendChild(row);
+  });
+}
+
+function buildSingleFileSection(layer, key, title) {
+  const state = layer[key];
+  const { wrap, sectionBody } = buildSectionShell(title, state.enabled, checked => {
+    state.enabled = checked;
+  });
+
+  const browseRow = document.createElement("div");
+  browseRow.className = "browse-row";
+  const browseBtn = document.createElement("button");
+  browseBtn.type = "button";
+  browseBtn.className = "small-button";
+  browseBtn.textContent = "Browse...";
+  browseRow.appendChild(browseBtn);
+  sectionBody.appendChild(browseRow);
+
+  const listEl = document.createElement("div");
+  listEl.className = "file-list";
+  sectionBody.appendChild(listEl);
+
+  function refresh() {
+    renderFileList(listEl, state.path ? [state.path] : [], () => {
+      state.path = null;
+      refresh();
+      refreshUploadButtonState();
+    }, i => `${layer.name || "layer"}${layer.number}-${layer.variant}_${layer.version}${state.path ? state.path.match(/\.[^.]+$/)?.[0] || "" : ""}`);
+  }
+
+  browseBtn.addEventListener("click", async () => {
+    const result = await window.pywebview.api.browse_files(false);
+    if (result.ok && result.paths.length) {
+      state.path = result.paths[0];
+      refresh();
+      refreshUploadButtonState();
+    }
+  });
+
+  refresh();
+  return wrap;
+}
+
+function buildMultiFileSection(layer, key, title) {
+  const state = layer[key];
+  const { wrap, sectionBody } = buildSectionShell(title, state.enabled, checked => {
+    state.enabled = checked;
+  });
+
+  const browseRow = document.createElement("div");
+  browseRow.className = "browse-row";
+  const browseBtn = document.createElement("button");
+  browseBtn.type = "button";
+  browseBtn.className = "small-button";
+  browseBtn.textContent = "Browse...";
+  browseRow.appendChild(browseBtn);
+  sectionBody.appendChild(browseRow);
+
+  const listEl = document.createElement("div");
+  listEl.className = "file-list";
+  sectionBody.appendChild(listEl);
+
+  function refresh() {
+    renderFileList(listEl, state.paths, i => {
+      state.paths.splice(i, 1);
+      refresh();
+      refreshUploadButtonState();
+    });
+  }
+
+  browseBtn.addEventListener("click", async () => {
+    const result = await window.pywebview.api.browse_files(true);
+    if (result.ok && result.paths.length) {
+      state.paths = state.paths.concat(result.paths);
+      refresh();
+      refreshUploadButtonState();
+    }
+  });
+
+  refresh();
+  return wrap;
+}
+
+function buildSequenceSection(layer, key, title) {
+  const state = layer[key];
+  const { wrap, sectionBody } = buildSectionShell(title, state.enabled, checked => {
+    state.enabled = checked;
+  });
+
+  const handleRow = document.createElement("div");
+  handleRow.className = "handle-row";
+
+  const frontGroup = document.createElement("div");
+  frontGroup.className = "field-group";
+  const frontLabel = document.createElement("label");
+  frontLabel.className = "field-label";
+  frontLabel.textContent = "Handle (front/back)";
+  const handleInputsRow = document.createElement("div");
+  handleInputsRow.className = "layer-row";
+  const frontInput = document.createElement("input");
+  frontInput.type = "text";
+  frontInput.className = "field-select";
+  frontInput.value = state.handleFront;
+  frontInput.placeholder = "front";
+  const backInput = document.createElement("input");
+  backInput.type = "text";
+  backInput.className = "field-select";
+  backInput.value = state.handleBack;
+  backInput.placeholder = "back";
+  handleInputsRow.appendChild(frontInput);
+  handleInputsRow.appendChild(backInput);
+  frontGroup.appendChild(frontLabel);
+  frontGroup.appendChild(handleInputsRow);
+  handleRow.appendChild(frontGroup);
+  sectionBody.appendChild(handleRow);
+
+  const expectedGroup = document.createElement("div");
+  expectedGroup.className = "field-group";
+  const expectedLabel = document.createElement("label");
+  expectedLabel.className = "field-label";
+  expectedLabel.textContent = "Expected frames (from Kitsu, first number)";
+  const expectedInput = document.createElement("input");
+  expectedInput.type = "text";
+  expectedInput.className = "field-select";
+  expectedInput.value = state.expectedFrames || "";
+  expectedInput.placeholder = "e.g. 45";
+  expectedGroup.appendChild(expectedLabel);
+  expectedGroup.appendChild(expectedInput);
+  sectionBody.appendChild(expectedGroup);
+
+  const browseRow = document.createElement("div");
+  browseRow.className = "browse-row";
+  const browseBtn = document.createElement("button");
+  browseBtn.type = "button";
+  browseBtn.className = "small-button";
+  browseBtn.textContent = "Browse frames...";
+  browseRow.appendChild(browseBtn);
+  sectionBody.appendChild(browseRow);
+
+  const frameCheck = document.createElement("div");
+  frameCheck.className = "frame-check";
+  sectionBody.appendChild(frameCheck);
+
+  const overrideRow = document.createElement("label");
+  overrideRow.className = "override-row hidden";
+  const overrideBox = document.createElement("input");
+  overrideBox.type = "checkbox";
+  overrideBox.checked = state.override;
+  const overrideText = document.createElement("span");
+  overrideText.textContent = "\ud83d\ude1e Override and upload anyway";
+  overrideRow.appendChild(overrideBox);
+  overrideRow.appendChild(overrideText);
+  sectionBody.appendChild(overrideRow);
+
+  const listEl = document.createElement("div");
+  listEl.className = "file-list";
+  sectionBody.appendChild(listEl);
+
+  function updateFrameCheck() {
+    const expected = parseInt(expectedInput.value, 10);
+    const front = parseInt(frontInput.value, 10) || 0;
+    const back = parseInt(backInput.value, 10) || 0;
+    const actual = state.paths.length;
+
+    if (!expected || actual === 0) {
+      frameCheck.textContent = `${actual} frame(s) selected.`;
+      frameCheck.className = "frame-check";
+      overrideRow.classList.add("hidden");
+      return;
+    }
+
+    const totalExpected = expected + front + back;
+    if (actual === totalExpected) {
+      frameCheck.textContent = `${actual} frame(s), matches expected ${totalExpected} (handle ${front}/${back}).`;
+      frameCheck.className = "frame-check ok";
+      overrideRow.classList.add("hidden");
+      state.override = false;
+      overrideBox.checked = false;
+    } else {
+      frameCheck.textContent = `${actual} frame(s) selected, expected ${totalExpected} (${expected} + handle ${front}/${back}). Recheck for extra reference frames.`;
+      frameCheck.className = "frame-check warn";
+      overrideRow.classList.remove("hidden");
+    }
+  }
+
+  function refresh() {
+    renderFileList(listEl, state.paths, i => {
+      state.paths.splice(i, 1);
+      refresh();
+    }, i => {
+      const start = 1001 - (parseInt(frontInput.value, 10) || 0);
+      return `...${key}.${String(start + i).padStart(4, "0")}`;
+    });
+    updateFrameCheck();
+    refreshUploadButtonState();
+  }
+
+  frontInput.addEventListener("change", () => {
+    state.handleFront = parseInt(frontInput.value, 10) || 0;
+    refresh();
+  });
+  backInput.addEventListener("change", () => {
+    state.handleBack = parseInt(backInput.value, 10) || 0;
+    refresh();
+  });
+  expectedInput.addEventListener("change", () => {
+    state.expectedFrames = parseInt(expectedInput.value, 10) || null;
+    updateFrameCheck();
+  });
+  overrideBox.addEventListener("change", () => {
+    state.override = overrideBox.checked;
+    refreshUploadButtonState();
+  });
+
+  browseBtn.addEventListener("click", async () => {
+    const result = await window.pywebview.api.browse_files(true);
+    if (result.ok && result.paths.length) {
+      state.paths = state.paths.concat(result.paths);
+      refresh();
+    }
+  });
+
+  refresh();
+  return wrap;
+}
+
+// ---------------------------------------------------------------
+// Upload button: enabled once at least one layer is named and every
+// enabled sequence section either matches its expected frame count
+// or has been explicitly overridden.
+// ---------------------------------------------------------------
+
+function refreshUploadButtonState() {
+  const shotChosen = currentAutoPath().length === 5;
+  const namedLayers = layers.filter(l => l.name);
+
+  let blocked = false;
+  let blockReason = "";
+  namedLayers.forEach(layer => {
+    ["raw", "jpeg"].forEach(key => {
+      const section = layer[key];
+      if (!section.enabled || section.paths.length === 0) return;
+      const expected = section.expectedFrames;
+      if (!expected) return;
+      const totalExpected = expected + section.handleFront + section.handleBack;
+      if (section.paths.length !== totalExpected && !section.override) {
+        blocked = true;
+        blockReason = `${layer.name || "a layer"}'s ${key} frame count doesn't match, check the frame count warning or override it.`;
+      }
+    });
+  });
+
+  const ready = shotChosen && namedLayers.length > 0 && !blocked;
+  uploadButton.disabled = !ready;
+  uploadButton.classList.toggle("ready", ready);
+
+  if (ready) {
+    uploadHint.textContent = "";
+  } else if (!shotChosen) {
+    uploadHint.textContent = "Pick Project, Episode, Sequence, and Shot above first.";
+  } else if (namedLayers.length === 0) {
+    uploadHint.textContent = "Add a layer and pick a character name before uploading.";
+  } else if (blocked) {
+    uploadHint.textContent = blockReason;
+  }
+}
+
+function buildBaseName(layer) {
+  const project = ddProject.value;
+  const episode = ddEpisode.value;
+  const sequence = ddSequence.value;
+  const shot = ddShot.value;
+  return `${project}${episode}_${sequence}_${shot}_smAnim_${layer.name}${layer.number}-${layer.variant}_${layer.version}`;
+}
+
+uploadButton.addEventListener("click", async () => {
+  uploadButton.disabled = true;
+  uploadStatus.innerHTML = "";
+  const shotParts = currentAutoPath();
+
+  for (const layer of layers.filter(l => l.name)) {
+    const baseName = buildBaseName(layer);
+    addUploadLine(`Uploading ${baseName}...`, "info");
+
+    const result = await window.pywebview.api.upload_layer_publish({
+      shot_parts: shotParts,
+      base_name: baseName,
+      mp4: { enabled: layer.mp4.enabled, path: layer.mp4.path },
+      raw: { enabled: layer.raw.enabled, paths: layer.raw.paths, handle_front: layer.raw.handleFront },
+      jpeg: { enabled: layer.jpeg.enabled, paths: layer.jpeg.paths, handle_front: layer.jpeg.handleFront },
+      production_data: { enabled: layer.productionData.enabled, paths: layer.productionData.paths },
+    });
+
+    if (!result.ok) {
+      addUploadLine(`[FAIL] ${baseName}: ${result.detail}`, "fail");
+      continue;
+    }
+    Object.entries(result.results).forEach(([section, sectionResult]) => {
+      if (sectionResult.ok) {
+        addUploadLine(`[OK] ${section}: ${sectionResult.detail}`, "ok");
+      } else {
+        addUploadLine(`[FAIL] ${section}: ${sectionResult.detail}`, "fail");
+      }
+    });
+  }
+
+  refreshUploadButtonState();
+});
+
+function addUploadLine(text, kind) {
+  const line = document.createElement("div");
+  line.textContent = text;
+  line.className = kind === "ok" ? "boot-line-ok" : kind === "fail" ? "boot-line-fail" : "boot-line-info";
+  uploadStatus.appendChild(line);
 }
