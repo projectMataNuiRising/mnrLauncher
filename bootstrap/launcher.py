@@ -152,15 +152,41 @@ def run_cached_app(cache_dir):
     runpy.run_path(main_py, run_name="__main__")
 
 
+def get_boot_log_path(cache_dir):
+    return os.path.join(cache_dir, "boot_log.txt")
+
+
+def _append_boot_log(cache_dir, msg):
+    try:
+        with open(get_boot_log_path(cache_dir), "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+    except Exception:
+        pass
+
+
 def main():
     cache_dir = get_cache_dir()
+
+    # Fresh log each launch, main.py reads this on startup so a Debug
+    # panel can show whether the GitHub fetch actually succeeded, since
+    # this whole phase happens before the window even opens.
+    try:
+        with open(get_boot_log_path(cache_dir), "w", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%H:%M:%S')}] MNR Launcher shell starting...\n")
+    except Exception:
+        pass
+
+    def log(msg):
+        _append_boot_log(cache_dir, msg)
+
     while True:
-        fetch_latest_app(cache_dir)
+        fetch_latest_app(cache_dir, status_callback=log)
         try:
             run_cached_app(cache_dir)
         except SystemExit as e:
             if e.code == REFRESH_EXIT_CODE:
-                continue  # Refresh button was used, loop back and refetch
+                log("Refresh requested, fetching again...")
+                continue
             raise
         break
 
