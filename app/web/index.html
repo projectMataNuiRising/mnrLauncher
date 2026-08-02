@@ -152,6 +152,49 @@
         <div id="smanim-note" class="next-note">
           Pick Project, Episode, Sequence, and Shot to continue.
         </div>
+
+        <div class="section-toggle-group">
+          <label class="section-toggle-header">
+            <input type="checkbox" id="export-enabled" checked>
+            <span>Export</span>
+          </label>
+          <div id="export-content" class="section-toggle-content">
+            <div class="field-group">
+              <label class="field-label">Type</label>
+              <select id="export-type" class="field-select">
+                <option value="publish">publish</option>
+                <option value="preview">preview</option>
+                <option value="temp">temp</option>
+              </select>
+            </div>
+
+            <div id="export-publish-content">
+              <div class="layer-stack-header">
+                <span class="field-label" style="margin:0;">Layers</span>
+                <button id="add-layer-button" class="small-button" type="button">+ Add Layer</button>
+              </div>
+              <div id="layer-stack" class="layer-stack"></div>
+            </div>
+
+            <div id="export-preview-content" class="hidden">
+              <div class="next-note">Preview upload (simplified, no strict validation) coming in the next slice.</div>
+            </div>
+
+            <div id="export-temp-content" class="hidden">
+              <div class="next-note">Temp dump upload coming in the next slice.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-toggle-group">
+          <label class="section-toggle-header">
+            <input type="checkbox" id="work-enabled">
+            <span>Work</span>
+          </label>
+          <div id="work-content" class="section-toggle-content hidden">
+            <div class="next-note">Work folder upload coming in the next slice.</div>
+          </div>
+        </div>
       </div>
 
       <div class="smanim-right">

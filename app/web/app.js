@@ -32,6 +32,28 @@ const smanimNote = document.getElementById("smanim-note");
 const smanimBack = document.getElementById("smanim-back");
 const treeRoot = document.getElementById("tree-root");
 const refreshButton = document.getElementById("refresh-button");
+const exportEnabled = document.getElementById("export-enabled");
+const exportContent = document.getElementById("export-content");
+const exportType = document.getElementById("export-type");
+const exportPublishContent = document.getElementById("export-publish-content");
+const exportPreviewContent = document.getElementById("export-preview-content");
+const exportTempContent = document.getElementById("export-temp-content");
+const workEnabled = document.getElementById("work-enabled");
+const workContent = document.getElementById("work-content");
+const addLayerButton = document.getElementById("add-layer-button");
+const layerStackEl = document.getElementById("layer-stack");
+
+// EDIT THIS LIST to add or remove the standard layer name choices
+// shown in each layer box's dropdown.
+const LAYER_NAME_OPTIONS = [
+  "antroz", "chirox", "mutran", "vamprah", "badGuy", "goodGuy", "gavla",
+  "kaiora", "kirop", "photok", "pirit", "radiak", "solek", "tanma",
+  "vican", "ignika", "gali", "kopaka", "lewa", "onua", "pohatu", "tahu",
+];
+const CUSTOM_OPTION_VALUE = "__custom__";
+
+let layerIdCounter = 0;
+const layers = []; // {id, name, number, variant, version}
 
 const ONBOARDING_URL = "https://docs.projectmatanuirising.com/onboarding/3-pcloud-drive-app";
 
@@ -212,6 +234,17 @@ async function initSmanimScreen() {
   showAllTasksBox.checked = false;
   showAllTasksChecked = false;
   smanimNote.textContent = "Pick Project, Episode, Sequence, and Shot to continue.";
+
+  exportEnabled.checked = true;
+  exportContent.classList.remove("hidden");
+  exportType.value = "publish";
+  exportPublishContent.classList.remove("hidden");
+  exportPreviewContent.classList.add("hidden");
+  exportTempContent.classList.add("hidden");
+  workEnabled.checked = false;
+  workContent.classList.add("hidden");
+  layers.length = 0;
+  renderLayerStack();
 
   const result = await window.pywebview.api.list_projects();
   if (result.ok) {
@@ -439,3 +472,223 @@ refreshButton.addEventListener("click", async () => {
   // and re-downloads the latest code from GitHub before reopening.
   await window.pywebview.api.request_refresh();
 });
+
+// ---------------------------------------------------------------
+// Export / Work toggle sections
+// ---------------------------------------------------------------
+
+exportEnabled.addEventListener("change", () => {
+  exportContent.classList.toggle("hidden", !exportEnabled.checked);
+});
+
+workEnabled.addEventListener("change", () => {
+  workContent.classList.toggle("hidden", !workEnabled.checked);
+});
+
+exportType.addEventListener("change", () => {
+  exportPublishContent.classList.toggle("hidden", exportType.value !== "publish");
+  exportPreviewContent.classList.toggle("hidden", exportType.value !== "preview");
+  exportTempContent.classList.toggle("hidden", exportType.value !== "temp");
+});
+
+// ---------------------------------------------------------------
+// Layer stack: add/remove layers, each with a character name,
+// 2-digit number, variant, and an auto-suggested version.
+// ---------------------------------------------------------------
+
+addLayerButton.addEventListener("click", () => {
+  const id = "layer-" + (++layerIdCounter);
+  layers.push({ id, name: "", number: "01", variant: "main", version: "" });
+  renderLayerStack();
+});
+
+function removeLayer(id) {
+  const idx = layers.findIndex(l => l.id === id);
+  if (idx !== -1) layers.splice(idx, 1);
+  renderLayerStack();
+}
+
+function fillLayerNameSelect(select, currentValue) {
+  select.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Select a character...";
+  select.appendChild(placeholder);
+
+  LAYER_NAME_OPTIONS.forEach(name => {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    select.appendChild(opt);
+  });
+
+  if (currentValue && !LAYER_NAME_OPTIONS.includes(currentValue)) {
+    const customOpt = document.createElement("option");
+    customOpt.value = currentValue;
+    customOpt.textContent = currentValue + " (custom)";
+    select.appendChild(customOpt);
+  }
+
+  const addCustomOpt = document.createElement("option");
+  addCustomOpt.value = CUSTOM_OPTION_VALUE;
+  addCustomOpt.textContent = "+ Add custom name";
+  select.appendChild(addCustomOpt);
+
+  select.value = currentValue || "";
+}
+
+// Looks at what already exists in export/publish/media for this exact
+// layer name + number + variant, and suggests the next free version
+// number instead of blindly defaulting to v001 every time.
+async function refreshLayerVersionOptions(layer, versionSelect) {
+  const shotPath = currentAutoPath(); // [project, "03-shot", episode, sequence, shot]
+  if (shotPath.length !== 5 || !layer.name) return;
+
+  const mediaPath = shotPath.concat(["smAnim", "export", "publish", "media"]);
+  const result = await window.pywebview.api.list_dir_entries(mediaPath, false);
+
+  const existingVersions = [];
+  if (result.ok) {
+    const pattern = new RegExp(`${layer.name}${layer.number}-${layer.variant}_v(\\d{3})`);
+    result.items.forEach(item => {
+      const match = item.name.match(pattern);
+      if (match) existingVersions.push(parseInt(match[1], 10));
+    });
+  }
+
+  const nextVersion = existingVersions.length ? Math.max(...existingVersions) + 1 : 1;
+  const suggested = "v" + String(nextVersion).padStart(3, "0");
+
+  versionSelect.innerHTML = "";
+  const opt = document.createElement("option");
+  opt.value = suggested;
+  opt.textContent = existingVersions.length ? `${suggested} (next available)` : `${suggested} (default)`;
+  versionSelect.appendChild(opt);
+  versionSelect.value = suggested;
+  layer.version = suggested;
+}
+
+function renderLayerStack() {
+  layerStackEl.innerHTML = "";
+
+  layers.forEach(layer => {
+    const box = document.createElement("div");
+    box.className = "layer-box";
+
+    // ---- header: character name + remove button ----
+    const header = document.createElement("div");
+    header.className = "layer-box-header";
+
+    const nameSelect = document.createElement("select");
+    nameSelect.className = "field-select";
+    fillLayerNameSelect(nameSelect, layer.name);
+    header.appendChild(nameSelect);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "icon-only-button";
+    removeBtn.textContent = "\u00d7";
+    removeBtn.title = "Remove layer";
+    removeBtn.addEventListener("click", () => removeLayer(layer.id));
+    header.appendChild(removeBtn);
+
+    box.appendChild(header);
+
+    // ---- body: number, variant, version ----
+    const body = document.createElement("div");
+    body.className = "layer-box-body";
+
+    const row = document.createElement("div");
+    row.className = "layer-row";
+
+    const numberGroup = document.createElement("div");
+    numberGroup.className = "field-group small";
+    const numberLabel = document.createElement("label");
+    numberLabel.className = "field-label";
+    numberLabel.textContent = "Number";
+    const numberInput = document.createElement("input");
+    numberInput.type = "text";
+    numberInput.className = "field-select";
+    numberInput.maxLength = 2;
+    numberInput.value = layer.number;
+    numberInput.disabled = !layer.name;
+    numberGroup.appendChild(numberLabel);
+    numberGroup.appendChild(numberInput);
+
+    const variantGroup = document.createElement("div");
+    variantGroup.className = "field-group small";
+    const variantLabel = document.createElement("label");
+    variantLabel.className = "field-label";
+    variantLabel.textContent = "Variant";
+    const variantInput = document.createElement("input");
+    variantInput.type = "text";
+    variantInput.className = "field-select";
+    variantInput.value = layer.variant;
+    variantInput.disabled = !layer.name;
+    variantGroup.appendChild(variantLabel);
+    variantGroup.appendChild(variantInput);
+
+    row.appendChild(numberGroup);
+    row.appendChild(variantGroup);
+    body.appendChild(row);
+
+    const versionGroup = document.createElement("div");
+    versionGroup.className = "field-group";
+    const versionLabel = document.createElement("label");
+    versionLabel.className = "field-label";
+    versionLabel.textContent = "Version";
+    const versionSelect = document.createElement("select");
+    versionSelect.className = "field-select";
+    versionSelect.disabled = !layer.name;
+    versionSelect.addEventListener("change", () => {
+      layer.version = versionSelect.value;
+    });
+    versionGroup.appendChild(versionLabel);
+    versionGroup.appendChild(versionSelect);
+    body.appendChild(versionGroup);
+
+    const note = document.createElement("div");
+    note.className = "next-note";
+    note.textContent = 'Keep number 01 and variant "main" for most cases.';
+    body.appendChild(note);
+
+    box.appendChild(body);
+    layerStackEl.appendChild(box);
+
+    // ---- wire up interactions ----
+    numberInput.addEventListener("change", () => {
+      const padded = numberInput.value.replace(/\D/g, "").padStart(2, "0").slice(-2) || "01";
+      layer.number = padded;
+      numberInput.value = padded;
+      refreshLayerVersionOptions(layer, versionSelect);
+    });
+
+    variantInput.addEventListener("change", () => {
+      layer.variant = variantInput.value.trim() || "main";
+      variantInput.value = layer.variant;
+      refreshLayerVersionOptions(layer, versionSelect);
+    });
+
+    nameSelect.addEventListener("change", async () => {
+      if (nameSelect.value === CUSTOM_OPTION_VALUE) {
+        const customName = prompt("Custom layer name:");
+        if (!customName) {
+          nameSelect.value = layer.name || "";
+          return;
+        }
+        layer.name = customName.trim();
+        fillLayerNameSelect(nameSelect, layer.name);
+      } else {
+        layer.name = nameSelect.value;
+      }
+      numberInput.disabled = !layer.name;
+      variantInput.disabled = !layer.name;
+      versionSelect.disabled = !layer.name;
+      if (layer.name) await refreshLayerVersionOptions(layer, versionSelect);
+    });
+
+    if (layer.name) {
+      refreshLayerVersionOptions(layer, versionSelect);
+    }
+  });
+}
