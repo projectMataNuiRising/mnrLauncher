@@ -1,11 +1,16 @@
 name: Build Windows Installer
 
 # This runs automatically on GitHub's own Windows machines every time
-# code is pushed to main, or can be triggered manually from the Actions
-# tab. It compiles bootstrap/launcher.py into one MNR_Launcher.exe,
-# using a clean full Python install (not the stripped-down portable one
-# artists use), since PyInstaller needs the full standard library to
-# build reliably.
+# code is pushed to main (only when bootstrap/ or this file changes),
+# or can be triggered manually from the Actions tab. It compiles
+# bootstrap/launcher.py into one MNR_Launcher.exe, using a clean full
+# Python install (not the stripped-down portable one artists use),
+# since PyInstaller needs the full standard library to build reliably.
+#
+# It also publishes a GitHub Release with that .exe attached, using
+# the run number as an auto-incrementing version. The running app
+# checks that release on every launch to see if a newer shell is
+# available, so artists never have to manually re-download a new .exe.
 
 on:
   push:
@@ -14,6 +19,9 @@ on:
       - 'bootstrap/**'
       - '.github/workflows/build.yml'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build-windows:
@@ -29,14 +37,31 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pywebview pythonnet psutil pyinstaller
+          pip install pywebview pythonnet psutil requests Pillow send2trash pyinstaller
+
+      # Bakes the build number into launcher.py's SHELL_VERSION placeholder
+      # before compiling, so the running exe always knows its own version,
+      # and that same number becomes the GitHub Release tag below, keeping
+      # the two permanently in sync with zero manual version bumping.
+      - name: Stamp the build version
+        shell: pwsh
+        run: |
+          (Get-Content bootstrap/launcher.py) -replace '0\.0\.0-dev', "${{ github.run_number }}" | Set-Content bootstrap/launcher.py
 
       - name: Build the Windows executable
         run: |
-          pyinstaller --onefile --windowed --name MNR_Launcher bootstrap/launcher.py
+          pyinstaller --onefile --windowed --name MNR_Launcher --icon=bootstrap/assets/icon.ico --version-file=bootstrap/assets/version_info.txt bootstrap/launcher.py
 
-      - name: Upload the built .exe
+      - name: Upload the build artifact
         uses: actions/upload-artifact@v4
         with:
           name: MNR_Launcher-windows
           path: dist/MNR_Launcher.exe
+
+      - name: Publish a GitHub Release with the .exe attached
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: MNR Launcher v${{ github.run_number }}
+          files: dist/MNR_Launcher.exe
+          generate_release_notes: false
