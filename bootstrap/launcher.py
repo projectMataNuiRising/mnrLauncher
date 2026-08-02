@@ -288,15 +288,80 @@ def check_and_apply_shell_update(status_callback=None):
     current_exe = sys.executable
     new_exe_path = current_exe + ".new"
 
-    try:
-        urllib.request.urlretrieve(asset_url, new_exe_path)
-    except Exception as e:
-        report(f"Shell update download failed ({e}), continuing with current version.")
-        return False
+    # From here on this happens inside a small visible window instead of
+    # completely invisibly. Two reasons: so a user isn't left wondering
+    # why the app is slow to open with nothing on screen, and because a
+    # silent process that downloads a new exe and replaces itself with
+    # zero visible window is exactly the shape of behavior antivirus
+    # heuristics flag as suspicious. This still requires no click or
+    # action from the user, it just shows what is happening instead of
+    # hiding it.
+    update_result = {"applied": False}
 
-    report("Update downloaded, restarting...")
-    _spawn_update_relay(current_exe, new_exe_path)
-    return True
+    def do_update(window):
+        try:
+            urllib.request.urlretrieve(asset_url, new_exe_path)
+        except Exception as e:
+            report(f"Shell update download failed ({e}), continuing with current version.")
+            window.destroy()
+            return
+
+        report("Update downloaded, restarting...")
+        _refresh_windows_icon_cache()
+        _spawn_update_relay(current_exe, new_exe_path)
+        update_result["applied"] = True
+        window.destroy()
+
+    window = webview.create_window(
+        "MNR Launcher",
+        html=_UPDATE_WINDOW_HTML,
+        width=380,
+        height=160,
+        resizable=False,
+    )
+    webview.start(do_update, (window,))
+
+    return update_result["applied"]
+
+
+_UPDATE_WINDOW_HTML = """
+<html>
+<body style="margin:0; height:100vh; display:flex; align-items:center;
+             justify-content:center; background:#1a1b1e; color:#e7e8ea;
+             font-family: -apple-system, 'Segoe UI', Arial, sans-serif;">
+  <div style="text-align:center;">
+    <div style="font-size:16px; font-weight:600; margin-bottom:8px;">
+      Updating MNR Launcher...
+    </div>
+    <div style="font-size:12px; color:#8b8d93;">
+      This will just take a moment.
+    </div>
+  </div>
+</body>
+</html>
+"""
+
+
+def _refresh_windows_icon_cache():
+    """
+    Windows aggressively caches file icons per path, so even after a
+    genuinely different icon is compiled into the exe at this same
+    path, Explorer/taskbar can keep showing the old cached one. This
+    calls Windows' own built-in, Microsoft-signed cache-clearing tool
+    rather than manually touching the icon cache database or
+    restarting Explorer, since a legitimate signed utility doing this
+    is far less likely to raise any suspicion than an app reaching
+    into Explorer's internals itself.
+    """
+    if platform.system() != "Windows":
+        return
+    try:
+        subprocess.Popen(
+            ["ie4uinit.exe", "-ClearIconCache"],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception:
+        pass
 
 
 def _spawn_update_relay(current_exe, new_exe_path):
