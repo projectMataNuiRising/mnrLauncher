@@ -421,6 +421,10 @@ class MnrApi:
     def get_debug_log(self):
         return {"lines": list(_DEBUG_LOG)}
 
+    def log_frontend_error(self, msg):
+        _log(f"[frontend error] {msg}")
+        return {"ok": True}
+
     # --------------------------------------------------------
     # File browsing (native OS picker, since a webview cannot read the
     # local filesystem on its own) and the real Stop Motion publish
