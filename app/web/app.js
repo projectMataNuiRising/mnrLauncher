@@ -762,15 +762,30 @@ function buildLayerNameCombo(layer, onChange) {
   const popup = document.createElement("div");
   popup.className = "combo-box-popup hidden";
 
+  const searchInput = document.createElement("input");
+  searchInput.type = "text";
+  searchInput.className = "combo-box-search";
+  searchInput.placeholder = "Type to find...";
+
   const optionsWrap = document.createElement("div");
   optionsWrap.className = "combo-box-options";
 
   function renderOptions() {
     optionsWrap.innerHTML = "";
+    const query = searchInput.value.trim().toLowerCase();
     const allNames = (layer.name && !LAYER_NAME_OPTIONS.includes(layer.name))
       ? [layer.name].concat(LAYER_NAME_OPTIONS)
       : LAYER_NAME_OPTIONS;
-    allNames.forEach(name => {
+    const filtered = query ? allNames.filter(n => n.toLowerCase().includes(query)) : allNames;
+
+    if (filtered.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "combo-box-empty";
+      empty.textContent = "No matches.";
+      optionsWrap.appendChild(empty);
+    }
+
+    filtered.forEach(name => {
       const opt = document.createElement("div");
       opt.className = "combo-box-option";
       opt.textContent = name;
@@ -783,6 +798,9 @@ function buildLayerNameCombo(layer, onChange) {
     });
   }
 
+  searchInput.addEventListener("input", renderOptions);
+  searchInput.addEventListener("click", (e) => e.stopPropagation());
+
   const pinned = document.createElement("div");
   pinned.className = "combo-box-pinned";
   pinned.textContent = "+ Add custom name";
@@ -794,6 +812,7 @@ function buildLayerNameCombo(layer, onChange) {
     onChange(customName.trim());
   });
 
+  popup.appendChild(searchInput);
   popup.appendChild(optionsWrap);
   popup.appendChild(pinned);
 
@@ -802,9 +821,11 @@ function buildLayerNameCombo(layer, onChange) {
     const isOpen = !popup.classList.contains("hidden");
     closeAllComboBoxes();
     if (!isOpen) {
+      searchInput.value = "";
       renderOptions();
       popup.classList.remove("hidden");
       openComboBox = wrap;
+      searchInput.focus();
     }
   });
 
@@ -842,6 +863,21 @@ async function refreshLayerVersionOptions(layer, versionSelect) {
   versionSelect.appendChild(opt);
   versionSelect.value = suggested;
   layer.version = suggested;
+}
+
+// refreshLayerVersionOptions is async (it checks pCloud for existing
+// versions), so anything built using layer.version before it resolves
+// (like the mp4/frame rename previews) briefly shows a blank version.
+// This wrapper re-renders the whole layer stack once the version is
+// actually known, so previews catch up instead of staying stale. It
+// only re-renders if the version actually changed, so this settles
+// after one extra pass instead of looping.
+async function updateLayerVersion(layer, versionSelect) {
+  const before = layer.version;
+  await refreshLayerVersionOptions(layer, versionSelect);
+  if (layer.version !== before) {
+    renderLayerStack();
+  }
 }
 
 function renderLayerStack() {
@@ -949,17 +985,17 @@ function renderLayerStack() {
       const padded = numberInput.value.replace(/\D/g, "").padStart(2, "0").slice(-2) || "01";
       layer.number = padded;
       numberInput.value = padded;
-      refreshLayerVersionOptions(layer, versionSelect);
+      updateLayerVersion(layer, versionSelect);
     });
 
     variantInput.addEventListener("change", () => {
       layer.variant = variantInput.value.trim() || "main";
       variantInput.value = layer.variant;
-      refreshLayerVersionOptions(layer, versionSelect);
+      updateLayerVersion(layer, versionSelect);
     });
 
     if (layer.name) {
-      refreshLayerVersionOptions(layer, versionSelect);
+      updateLayerVersion(layer, versionSelect);
     }
   });
 
@@ -1271,7 +1307,7 @@ function buildSequenceSection(layer, key, title, kind) {
 
 function refreshUploadButtonState() {
   const shotChosen = currentAutoPath().length === 5;
-  const namedLayers = layers.filter(l => l.name);
+  const namedLayers = layers.filter(l => l.name && l.number && l.variant && l.version);
 
   refreshTree();
 
@@ -1327,7 +1363,7 @@ uploadButton.addEventListener("click", async () => {
   uploadStatus.innerHTML = "";
   const shotParts = currentAutoPath();
 
-  for (const layer of layers.filter(l => l.name)) {
+  for (const layer of layers.filter(l => l.name && l.number && l.variant && l.version)) {
     const baseName = buildBaseName(layer);
     addUploadLine(`Uploading ${baseName}...`, "info");
 
