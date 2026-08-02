@@ -52,6 +52,12 @@ const layerStackEl = document.getElementById("layer-stack");
 const uploadButton = document.getElementById("upload-button");
 const uploadHint = document.getElementById("upload-hint");
 const uploadStatus = document.getElementById("upload-status");
+const sharedHandleFront = document.getElementById("shared-handle-front");
+const sharedHandleBack = document.getElementById("shared-handle-back");
+const sharedExpectedFrames = document.getElementById("shared-expected-frames");
+const smanimLeft = document.getElementById("smanim-left");
+const smanimDivider = document.getElementById("smanim-divider");
+const smanimRight = document.getElementById("smanim-right");
 
 // EDIT THIS LIST to add or remove the standard layer name choices
 // shown in each layer box's dropdown.
@@ -60,10 +66,9 @@ const LAYER_NAME_OPTIONS = [
   "kaiora", "kirop", "photok", "pirit", "radiak", "solek", "tanma",
   "vican", "ignika", "gali", "kopaka", "lewa", "onua", "pohatu", "tahu",
 ];
-const CUSTOM_OPTION_VALUE = "__custom__";
 
 let layerIdCounter = 0;
-const layers = []; // {id, name, number, variant, version}
+const layers = []; // {id, name, number, variant, version, collapsed, mp4, raw, jpeg, productionData}
 
 const ONBOARDING_URL = "https://docs.projectmatanuirising.com/onboarding/3-pcloud-drive-app";
 
@@ -272,6 +277,12 @@ async function initSmanimScreen() {
   layers.length = 0;
   renderLayerStack();
   uploadStatus.innerHTML = "";
+  sharedFrameSettings.handleFront = 0;
+  sharedFrameSettings.handleBack = 0;
+  sharedFrameSettings.expectedFrames = null;
+  sharedHandleFront.value = "0";
+  sharedHandleBack.value = "0";
+  sharedExpectedFrames.value = "";
 
   const result = await window.pywebview.api.list_projects();
   if (result.ok) {
@@ -559,13 +570,69 @@ exportType.addEventListener("change", () => {
 // 2-digit number, variant, and an auto-suggested version.
 // ---------------------------------------------------------------
 
+// ---------------------------------------------------------------
+// Resizable divider between the left panel and the folder tree.
+// ---------------------------------------------------------------
+
+(function setupSmanimDivider() {
+  let dragging = false;
+
+  smanimDivider.addEventListener("mousedown", () => {
+    dragging = true;
+    smanimDivider.classList.add("dragging");
+    document.body.style.userSelect = "none";
+  });
+
+  document.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const layoutRect = smanimLeft.parentElement.getBoundingClientRect();
+    let leftPercent = ((e.clientX - layoutRect.left) / layoutRect.width) * 100;
+    leftPercent = Math.max(25, Math.min(80, leftPercent));
+    smanimLeft.style.flex = `0 0 ${leftPercent}%`;
+    smanimRight.style.flex = `1 1 ${100 - leftPercent}%`;
+  });
+
+  document.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    smanimDivider.classList.remove("dragging");
+    document.body.style.userSelect = "";
+  });
+})();
+
+// ---------------------------------------------------------------
+// Shared frame settings: every layer in this shot uses the same
+// handle and expected frame count, so these live once, above the
+// layer stack, instead of being repeated per layer.
+// ---------------------------------------------------------------
+
+const sharedFrameSettings = { handleFront: 0, handleBack: 0, expectedFrames: null };
+
+sharedHandleFront.addEventListener("change", () => {
+  sharedFrameSettings.handleFront = parseInt(sharedHandleFront.value, 10) || 0;
+  renderLayerStack();
+});
+sharedHandleBack.addEventListener("change", () => {
+  sharedFrameSettings.handleBack = parseInt(sharedHandleBack.value, 10) || 0;
+  renderLayerStack();
+});
+sharedExpectedFrames.addEventListener("change", () => {
+  sharedFrameSettings.expectedFrames = parseInt(sharedExpectedFrames.value, 10) || null;
+  renderLayerStack();
+});
+
+// ---------------------------------------------------------------
+// Layer stack: add/remove layers, each with a character name,
+// layer number, variant, and an auto-suggested version.
+// ---------------------------------------------------------------
+
 addLayerButton.addEventListener("click", () => {
   const id = "layer-" + (++layerIdCounter);
   layers.push({
-    id, name: "", number: "01", variant: "main", version: "",
+    id, name: "", number: "01", variant: "main", version: "", collapsed: false,
     mp4: { enabled: true, path: null },
-    raw: { enabled: true, paths: [], handleFront: 0, handleBack: 0, expectedFrames: null, override: false },
-    jpeg: { enabled: true, paths: [], handleFront: 0, handleBack: 0, expectedFrames: null, override: false },
+    raw: { enabled: true, paths: [], override: false, typeOverride: false },
+    jpeg: { enabled: true, paths: [], override: false, typeOverride: false },
     productionData: { enabled: false, paths: [] },
   });
   renderLayerStack();
@@ -577,40 +644,95 @@ function removeLayer(id) {
   renderLayerStack();
 }
 
-function fillLayerNameSelect(select, currentValue) {
-  select.innerHTML = "";
-  const placeholder = document.createElement("option");
-  placeholder.value = "";
-  placeholder.textContent = "Select a character...";
-  select.appendChild(placeholder);
+// ---------------------------------------------------------------
+// Custom character-name dropdown. A native <select> can't keep an
+// option pinned in view while the rest of the list scrolls, so this
+// is a small hand-built combobox instead: the character list scrolls,
+// "+ Add custom name" stays fixed at the bottom, always visible,
+// like a frozen row that never scrolls away.
+// ---------------------------------------------------------------
 
-  LAYER_NAME_OPTIONS.forEach(name => {
-    const opt = document.createElement("option");
-    opt.value = name;
-    opt.textContent = name;
-    select.appendChild(opt);
-  });
+let openComboBox = null;
 
-  if (currentValue && !LAYER_NAME_OPTIONS.includes(currentValue)) {
-    const customOpt = document.createElement("option");
-    customOpt.value = currentValue;
-    customOpt.textContent = currentValue + " (custom)";
-    select.appendChild(customOpt);
+document.addEventListener("click", (e) => {
+  if (openComboBox && !openComboBox.contains(e.target)) {
+    closeAllComboBoxes();
+  }
+});
+
+function closeAllComboBoxes() {
+  document.querySelectorAll(".combo-box-popup").forEach(p => p.classList.add("hidden"));
+  openComboBox = null;
+}
+
+function buildLayerNameCombo(layer, onChange) {
+  const wrap = document.createElement("div");
+  wrap.className = "combo-box";
+
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.className = "field-select combo-box-trigger";
+  trigger.textContent = layer.name || "Select a character...";
+
+  const popup = document.createElement("div");
+  popup.className = "combo-box-popup hidden";
+
+  const optionsWrap = document.createElement("div");
+  optionsWrap.className = "combo-box-options";
+
+  function renderOptions() {
+    optionsWrap.innerHTML = "";
+    const allNames = (layer.name && !LAYER_NAME_OPTIONS.includes(layer.name))
+      ? [layer.name].concat(LAYER_NAME_OPTIONS)
+      : LAYER_NAME_OPTIONS;
+    allNames.forEach(name => {
+      const opt = document.createElement("div");
+      opt.className = "combo-box-option";
+      opt.textContent = name;
+      opt.addEventListener("click", () => {
+        popup.classList.add("hidden");
+        openComboBox = null;
+        onChange(name);
+      });
+      optionsWrap.appendChild(opt);
+    });
   }
 
-  const addCustomOpt = document.createElement("option");
-  addCustomOpt.value = CUSTOM_OPTION_VALUE;
-  addCustomOpt.textContent = "+ Add custom name";
-  select.appendChild(addCustomOpt);
+  const pinned = document.createElement("div");
+  pinned.className = "combo-box-pinned";
+  pinned.textContent = "+ Add custom name";
+  pinned.addEventListener("click", () => {
+    popup.classList.add("hidden");
+    openComboBox = null;
+    const customName = prompt("Custom layer name:");
+    if (!customName) return;
+    onChange(customName.trim());
+  });
 
-  select.value = currentValue || "";
+  popup.appendChild(optionsWrap);
+  popup.appendChild(pinned);
+
+  trigger.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const isOpen = !popup.classList.contains("hidden");
+    closeAllComboBoxes();
+    if (!isOpen) {
+      renderOptions();
+      popup.classList.remove("hidden");
+      openComboBox = wrap;
+    }
+  });
+
+  wrap.appendChild(trigger);
+  wrap.appendChild(popup);
+  return wrap;
 }
 
 // Looks at what already exists in export/publish/media for this exact
 // layer name + number + variant, and suggests the next free version
 // number instead of blindly defaulting to v001 every time.
 async function refreshLayerVersionOptions(layer, versionSelect) {
-  const shotPath = currentAutoPath(); // [project, "03-shot", episode, sequence, shot]
+  const shotPath = currentAutoPath();
   if (shotPath.length !== 5 || !layer.name) return;
 
   const mediaPath = shotPath.concat(["smAnim", "export", "publish", "media"]);
@@ -644,14 +766,26 @@ function renderLayerStack() {
     const box = document.createElement("div");
     box.className = "layer-box";
 
-    // ---- header: character name + remove button ----
+    // ---- header: character name + collapse + remove ----
     const header = document.createElement("div");
     header.className = "layer-box-header";
 
-    const nameSelect = document.createElement("select");
-    nameSelect.className = "field-select";
-    fillLayerNameSelect(nameSelect, layer.name);
-    header.appendChild(nameSelect);
+    const combo = buildLayerNameCombo(layer, (name) => {
+      layer.name = name;
+      renderLayerStack();
+    });
+    header.appendChild(combo);
+
+    const collapseBtn = document.createElement("button");
+    collapseBtn.type = "button";
+    collapseBtn.className = "layer-collapse-toggle";
+    collapseBtn.textContent = layer.collapsed ? "\u25b6" : "\u25bc";
+    collapseBtn.title = layer.collapsed ? "Expand" : "Collapse";
+    collapseBtn.addEventListener("click", () => {
+      layer.collapsed = !layer.collapsed;
+      renderLayerStack();
+    });
+    header.appendChild(collapseBtn);
 
     const removeBtn = document.createElement("button");
     removeBtn.type = "button";
@@ -663,9 +797,9 @@ function renderLayerStack() {
 
     box.appendChild(header);
 
-    // ---- body: number, variant, version ----
+    // ---- body: layer number, variant, version, upload sections ----
     const body = document.createElement("div");
-    body.className = "layer-box-body";
+    body.className = "layer-box-body" + (layer.collapsed ? " collapsed" : "");
 
     const row = document.createElement("div");
     row.className = "layer-row";
@@ -674,7 +808,7 @@ function renderLayerStack() {
     numberGroup.className = "field-group small";
     const numberLabel = document.createElement("label");
     numberLabel.className = "field-label";
-    numberLabel.textContent = "Number";
+    numberLabel.innerHTML = 'Layer Number <span class="info-icon" tabindex="0" data-tooltip="If more than one layer uses the same character in this shot, increase this number by one for each additional layer.">?</span>';
     const numberInput = document.createElement("input");
     numberInput.type = "text";
     numberInput.className = "field-select";
@@ -688,7 +822,7 @@ function renderLayerStack() {
     variantGroup.className = "field-group small";
     const variantLabel = document.createElement("label");
     variantLabel.className = "field-label";
-    variantLabel.textContent = "Variant";
+    variantLabel.innerHTML = 'Variant <span class="info-icon" tabindex="0" data-tooltip="The variant of this specific clip or take, not of the character. Keep it as main unless you are told otherwise.">?</span>';
     const variantInput = document.createElement("input");
     variantInput.type = "text";
     variantInput.className = "field-select";
@@ -716,22 +850,16 @@ function renderLayerStack() {
     versionGroup.appendChild(versionSelect);
     body.appendChild(versionGroup);
 
-    const note = document.createElement("div");
-    note.className = "next-note";
-    note.textContent = 'Keep number 01 and variant "main" for most cases.';
-    body.appendChild(note);
-
     box.appendChild(body);
 
     // ---- upload sections: mp4, raw sequence, jpeg sequence, productionData ----
     body.appendChild(buildSingleFileSection(layer, "mp4", "MP4 / MOV Preview"));
-    body.appendChild(buildSequenceSection(layer, "raw", "Raw Image Sequence"));
-    body.appendChild(buildSequenceSection(layer, "jpeg", "JPEG Image Sequence"));
+    body.appendChild(buildSequenceSection(layer, "raw", "Raw Image Sequence", "raw"));
+    body.appendChild(buildSequenceSection(layer, "jpeg", "JPEG Image Sequence", "jpeg"));
     body.appendChild(buildMultiFileSection(layer, "productionData", "Production Data (optional)"));
 
     layerStackEl.appendChild(box);
 
-    // ---- wire up interactions ----
     numberInput.addEventListener("change", () => {
       const padded = numberInput.value.replace(/\D/g, "").padStart(2, "0").slice(-2) || "01";
       layer.number = padded;
@@ -745,25 +873,6 @@ function renderLayerStack() {
       refreshLayerVersionOptions(layer, versionSelect);
     });
 
-    nameSelect.addEventListener("change", async () => {
-      if (nameSelect.value === CUSTOM_OPTION_VALUE) {
-        const customName = prompt("Custom layer name:");
-        if (!customName) {
-          nameSelect.value = layer.name || "";
-          return;
-        }
-        layer.name = customName.trim();
-        fillLayerNameSelect(nameSelect, layer.name);
-      } else {
-        layer.name = nameSelect.value;
-      }
-      numberInput.disabled = !layer.name;
-      variantInput.disabled = !layer.name;
-      versionSelect.disabled = !layer.name;
-      if (layer.name) await refreshLayerVersionOptions(layer, versionSelect);
-      refreshUploadButtonState();
-    });
-
     if (layer.name) {
       refreshLayerVersionOptions(layer, versionSelect);
     }
@@ -773,10 +882,11 @@ function renderLayerStack() {
 }
 
 // ---------------------------------------------------------------
-// Per-layer upload section builders. All three share the same basic
-// shape (checkbox to enable, a Browse button, a list of chosen files
-// shown in pastel green italic like a preview of what will upload),
-// raw/jpeg add handle inputs and frame-count validation on top.
+// Per-layer upload section builders. Each gets a large drop-zone
+// style area: click it to open the native file picker (always
+// reliable), or drag files onto it. Drag and drop depends on the
+// WebView engine actually exposing the dropped file's real path,
+// if it can't, the zone tells you to click and browse instead.
 // ---------------------------------------------------------------
 
 function buildSectionShell(title, enabled, onToggle) {
@@ -836,20 +946,74 @@ function renderFileList(container, items, onRemove, renamePreview) {
   });
 }
 
+function getExtension(path) {
+  const match = path.match(/\.([^.\\/]+)$/);
+  return match ? match[1].toLowerCase() : "";
+}
+
+const JPEG_ALLOWED_EXTENSIONS = ["jpg", "jpeg"];
+const RAW_EXCLUDED_EXTENSIONS = ["jpg", "jpeg", "png", "gif", "bmp", "webp", "tif", "tiff"];
+
+// Returns the subset of paths that fail the type check: "raw" must NOT
+// look like a consumer image format, "jpeg" must actually BE a jpeg.
+function findTypeMismatches(kind, paths) {
+  if (kind === "jpeg") return paths.filter(p => !JPEG_ALLOWED_EXTENSIONS.includes(getExtension(p)));
+  if (kind === "raw") return paths.filter(p => RAW_EXCLUDED_EXTENSIONS.includes(getExtension(p)));
+  return [];
+}
+
+function makeDropZone(labelText, onFiles) {
+  const zone = document.createElement("div");
+  zone.className = "drop-zone";
+  zone.tabIndex = 0;
+
+  const title = document.createElement("div");
+  title.className = "drop-zone-title";
+  title.textContent = "Drag files here";
+  const sub = document.createElement("div");
+  sub.textContent = labelText;
+  zone.appendChild(title);
+  zone.appendChild(sub);
+
+  zone.addEventListener("click", async () => {
+    const result = await window.pywebview.api.browse_files(true);
+    if (result.ok && result.paths.length) onFiles(result.paths);
+  });
+
+  zone.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    zone.classList.add("drag-over");
+  });
+  zone.addEventListener("dragleave", () => zone.classList.remove("drag-over"));
+  zone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    zone.classList.remove("drag-over");
+    const files = Array.from(e.dataTransfer.files || []);
+    const paths = files.map(f => f.pywebviewFullPath).filter(Boolean);
+    if (paths.length) {
+      onFiles(paths);
+    } else if (files.length) {
+      sub.textContent = "Drag and drop isn't available in this build yet, click here to browse instead.";
+    }
+  });
+
+  return zone;
+}
+
 function buildSingleFileSection(layer, key, title) {
   const state = layer[key];
   const { wrap, sectionBody } = buildSectionShell(title, state.enabled, checked => {
     state.enabled = checked;
   });
 
-  const browseRow = document.createElement("div");
-  browseRow.className = "browse-row";
-  const browseBtn = document.createElement("button");
-  browseBtn.type = "button";
-  browseBtn.className = "small-button";
-  browseBtn.textContent = "Browse...";
-  browseRow.appendChild(browseBtn);
-  sectionBody.appendChild(browseRow);
+  const zone = makeDropZone("or click to browse for one file", paths => {
+    if (paths.length) {
+      state.path = paths[0];
+      refresh();
+      refreshUploadButtonState();
+    }
+  });
+  sectionBody.appendChild(zone);
 
   const listEl = document.createElement("div");
   listEl.className = "file-list";
@@ -860,17 +1024,8 @@ function buildSingleFileSection(layer, key, title) {
       state.path = null;
       refresh();
       refreshUploadButtonState();
-    }, i => `${layer.name || "layer"}${layer.number}-${layer.variant}_${layer.version}${state.path ? state.path.match(/\.[^.]+$/)?.[0] || "" : ""}`);
+    }, i => `${layer.name || "layer"}${layer.number}-${layer.variant}_${layer.version}${state.path ? (state.path.match(/\.[^.]+$/)?.[0] || "") : ""}`);
   }
-
-  browseBtn.addEventListener("click", async () => {
-    const result = await window.pywebview.api.browse_files(false);
-    if (result.ok && result.paths.length) {
-      state.path = result.paths[0];
-      refresh();
-      refreshUploadButtonState();
-    }
-  });
 
   refresh();
   return wrap;
@@ -882,14 +1037,12 @@ function buildMultiFileSection(layer, key, title) {
     state.enabled = checked;
   });
 
-  const browseRow = document.createElement("div");
-  browseRow.className = "browse-row";
-  const browseBtn = document.createElement("button");
-  browseBtn.type = "button";
-  browseBtn.className = "small-button";
-  browseBtn.textContent = "Browse...";
-  browseRow.appendChild(browseBtn);
-  sectionBody.appendChild(browseRow);
+  const zone = makeDropZone("or click to browse for files", paths => {
+    state.paths = state.paths.concat(paths);
+    refresh();
+    refreshUploadButtonState();
+  });
+  sectionBody.appendChild(zone);
 
   const listEl = document.createElement("div");
   listEl.className = "file-list";
@@ -903,74 +1056,36 @@ function buildMultiFileSection(layer, key, title) {
     });
   }
 
-  browseBtn.addEventListener("click", async () => {
-    const result = await window.pywebview.api.browse_files(true);
-    if (result.ok && result.paths.length) {
-      state.paths = state.paths.concat(result.paths);
-      refresh();
-      refreshUploadButtonState();
-    }
-  });
-
   refresh();
   return wrap;
 }
 
-function buildSequenceSection(layer, key, title) {
+function buildSequenceSection(layer, key, title, kind) {
   const state = layer[key];
   const { wrap, sectionBody } = buildSectionShell(title, state.enabled, checked => {
     state.enabled = checked;
   });
 
-  const handleRow = document.createElement("div");
-  handleRow.className = "handle-row";
+  const zone = makeDropZone("or click to browse for frames", paths => {
+    state.paths = state.paths.concat(paths);
+    refresh();
+  });
+  sectionBody.appendChild(zone);
 
-  const frontGroup = document.createElement("div");
-  frontGroup.className = "field-group";
-  const frontLabel = document.createElement("label");
-  frontLabel.className = "field-label";
-  frontLabel.textContent = "Handle (front/back)";
-  const handleInputsRow = document.createElement("div");
-  handleInputsRow.className = "layer-row";
-  const frontInput = document.createElement("input");
-  frontInput.type = "text";
-  frontInput.className = "field-select";
-  frontInput.value = state.handleFront;
-  frontInput.placeholder = "front";
-  const backInput = document.createElement("input");
-  backInput.type = "text";
-  backInput.className = "field-select";
-  backInput.value = state.handleBack;
-  backInput.placeholder = "back";
-  handleInputsRow.appendChild(frontInput);
-  handleInputsRow.appendChild(backInput);
-  frontGroup.appendChild(frontLabel);
-  frontGroup.appendChild(handleInputsRow);
-  handleRow.appendChild(frontGroup);
-  sectionBody.appendChild(handleRow);
+  const typeWarning = document.createElement("div");
+  typeWarning.className = "type-warning hidden";
+  sectionBody.appendChild(typeWarning);
 
-  const expectedGroup = document.createElement("div");
-  expectedGroup.className = "field-group";
-  const expectedLabel = document.createElement("label");
-  expectedLabel.className = "field-label";
-  expectedLabel.textContent = "Expected frames (from Kitsu, first number)";
-  const expectedInput = document.createElement("input");
-  expectedInput.type = "text";
-  expectedInput.className = "field-select";
-  expectedInput.value = state.expectedFrames || "";
-  expectedInput.placeholder = "e.g. 45";
-  expectedGroup.appendChild(expectedLabel);
-  expectedGroup.appendChild(expectedInput);
-  sectionBody.appendChild(expectedGroup);
-
-  const browseRow = document.createElement("div");
-  browseRow.className = "browse-row";
-  const browseBtn = document.createElement("button");
-  browseBtn.type = "button";
-  browseBtn.className = "small-button";
-  browseBtn.textContent = "Browse frames...";
-  browseRow.appendChild(browseBtn);
-  sectionBody.appendChild(browseRow);
+  const typeOverrideRow = document.createElement("label");
+  typeOverrideRow.className = "type-warning-row hidden";
+  const typeOverrideBox = document.createElement("input");
+  typeOverrideBox.type = "checkbox";
+  typeOverrideBox.checked = state.typeOverride;
+  const typeOverrideText = document.createElement("span");
+  typeOverrideText.textContent = "I'm sure, upload anyway";
+  typeOverrideRow.appendChild(typeOverrideBox);
+  typeOverrideRow.appendChild(typeOverrideText);
+  sectionBody.appendChild(typeOverrideRow);
 
   const frameCheck = document.createElement("div");
   frameCheck.className = "frame-check";
@@ -991,10 +1106,24 @@ function buildSequenceSection(layer, key, title) {
   listEl.className = "file-list";
   sectionBody.appendChild(listEl);
 
+  function updateTypeCheck() {
+    const mismatches = findTypeMismatches(kind, state.paths);
+    if (mismatches.length === 0) {
+      typeWarning.classList.add("hidden");
+      typeOverrideRow.classList.add("hidden");
+      state.typeOverride = false;
+      return;
+    }
+    const expectation = kind === "jpeg" ? "a .jpg/.jpeg file" : "not a jpeg/png/etc image";
+    typeWarning.textContent = `${mismatches.length} file(s) don't look right for this section, expected ${expectation}: ${mismatches.map(p => p.split(/[\\/]/).pop()).join(", ")}`;
+    typeWarning.classList.remove("hidden");
+    typeOverrideRow.classList.remove("hidden");
+  }
+
   function updateFrameCheck() {
-    const expected = parseInt(expectedInput.value, 10);
-    const front = parseInt(frontInput.value, 10) || 0;
-    const back = parseInt(backInput.value, 10) || 0;
+    const expected = sharedFrameSettings.expectedFrames;
+    const front = sharedFrameSettings.handleFront;
+    const back = sharedFrameSettings.handleBack;
     const actual = state.paths.length;
 
     if (!expected || actual === 0) {
@@ -1023,36 +1152,21 @@ function buildSequenceSection(layer, key, title) {
       state.paths.splice(i, 1);
       refresh();
     }, i => {
-      const start = 1001 - (parseInt(frontInput.value, 10) || 0);
+      const start = 1001 - sharedFrameSettings.handleFront;
       return `...${key}.${String(start + i).padStart(4, "0")}`;
     });
+    updateTypeCheck();
     updateFrameCheck();
     refreshUploadButtonState();
   }
 
-  frontInput.addEventListener("change", () => {
-    state.handleFront = parseInt(frontInput.value, 10) || 0;
-    refresh();
-  });
-  backInput.addEventListener("change", () => {
-    state.handleBack = parseInt(backInput.value, 10) || 0;
-    refresh();
-  });
-  expectedInput.addEventListener("change", () => {
-    state.expectedFrames = parseInt(expectedInput.value, 10) || null;
-    updateFrameCheck();
+  typeOverrideBox.addEventListener("change", () => {
+    state.typeOverride = typeOverrideBox.checked;
+    refreshUploadButtonState();
   });
   overrideBox.addEventListener("change", () => {
     state.override = overrideBox.checked;
     refreshUploadButtonState();
-  });
-
-  browseBtn.addEventListener("click", async () => {
-    const result = await window.pywebview.api.browse_files(true);
-    if (result.ok && result.paths.length) {
-      state.paths = state.paths.concat(result.paths);
-      refresh();
-    }
   });
 
   refresh();
@@ -1060,9 +1174,10 @@ function buildSequenceSection(layer, key, title) {
 }
 
 // ---------------------------------------------------------------
-// Upload button: enabled once at least one layer is named and every
-// enabled sequence section either matches its expected frame count
-// or has been explicitly overridden.
+// Upload button: enabled once at least one layer is named, every
+// enabled sequence section's file types check out (or are overridden),
+// and every enabled sequence section's frame count matches (or is
+// overridden).
 // ---------------------------------------------------------------
 
 function refreshUploadButtonState() {
@@ -1075,9 +1190,17 @@ function refreshUploadButtonState() {
     ["raw", "jpeg"].forEach(key => {
       const section = layer[key];
       if (!section.enabled || section.paths.length === 0) return;
-      const expected = section.expectedFrames;
+
+      const mismatches = findTypeMismatches(key, section.paths);
+      if (mismatches.length > 0 && !section.typeOverride) {
+        blocked = true;
+        blockReason = `${layer.name || "a layer"}'s ${key} section has files that don't look right, check "I'm sure" or remove them.`;
+        return;
+      }
+
+      const expected = sharedFrameSettings.expectedFrames;
       if (!expected) return;
-      const totalExpected = expected + section.handleFront + section.handleBack;
+      const totalExpected = expected + sharedFrameSettings.handleFront + sharedFrameSettings.handleBack;
       if (section.paths.length !== totalExpected && !section.override) {
         blocked = true;
         blockReason = `${layer.name || "a layer"}'s ${key} frame count doesn't match, check the frame count warning or override it.`;
@@ -1121,8 +1244,8 @@ uploadButton.addEventListener("click", async () => {
       shot_parts: shotParts,
       base_name: baseName,
       mp4: { enabled: layer.mp4.enabled, path: layer.mp4.path },
-      raw: { enabled: layer.raw.enabled, paths: layer.raw.paths, handle_front: layer.raw.handleFront },
-      jpeg: { enabled: layer.jpeg.enabled, paths: layer.jpeg.paths, handle_front: layer.jpeg.handleFront },
+      raw: { enabled: layer.raw.enabled, paths: layer.raw.paths, handle_front: sharedFrameSettings.handleFront },
+      jpeg: { enabled: layer.jpeg.enabled, paths: layer.jpeg.paths, handle_front: sharedFrameSettings.handleFront },
       production_data: { enabled: layer.productionData.enabled, paths: layer.productionData.paths },
     });
 

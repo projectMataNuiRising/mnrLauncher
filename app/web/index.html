@@ -128,11 +128,11 @@
     </div>
   </div>
 
-  <!-- Stop Motion Upload tool, Stage 2a: nav cascade + read-only folder explorer -->
+  <!-- Stop Motion Upload tool -->
   <div id="smanim-screen" class="screen smanim-screen hidden">
     <div class="smanim-layout">
 
-      <div class="smanim-left">
+      <div class="smanim-left" id="smanim-left">
         <button id="smanim-back" class="back-button">
           <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M11 18l-6-6 6-6"/></svg></span>
           Home
@@ -158,9 +158,14 @@
           <select id="dd-shot" class="field-select" disabled></select>
         </div>
 
+        <div class="field-group">
+          <label class="field-label">Task</label>
+          <input type="text" class="field-select" value="smAnim" disabled>
+        </div>
+
         <label class="checkbox-row">
           <input type="checkbox" id="show-all-tasks">
-          Show all tasks (greyed out)
+          Show all tasks in the folder view on the right (reference only, this tool always uploads to smAnim)
         </label>
 
         <div id="smanim-note" class="next-note">
@@ -170,7 +175,8 @@
         <div class="section-toggle-group">
           <label class="section-toggle-header">
             <input type="checkbox" id="export-enabled" checked>
-            <span>Export</span>
+            <span>EXPORT (Deliverables)</span>
+            <span class="info-icon" tabindex="0" data-tooltip="The final frames and deliverables that get seen on screen: renders, previews, and published sequences.">?</span>
           </label>
           <div id="export-content" class="section-toggle-content">
             <div class="field-group">
@@ -183,6 +189,28 @@
             </div>
 
             <div id="export-publish-content">
+              <div class="shared-frame-settings">
+                <div class="handle-row">
+                  <div class="field-group">
+                    <label class="field-label">
+                      Handle (front/back)
+                      <span class="info-icon" tabindex="0" data-tooltip="Extra frames included before and after the shot's official range, from Kitsu. Every layer in this shot shares the same handle.">?</span>
+                    </label>
+                    <div class="layer-row">
+                      <input id="shared-handle-front" type="text" class="field-select" value="0" placeholder="front">
+                      <input id="shared-handle-back" type="text" class="field-select" value="0" placeholder="back">
+                    </div>
+                  </div>
+                </div>
+                <div class="field-group">
+                  <label class="field-label">
+                    Expected Frames
+                    <span class="info-icon" tabindex="0" data-tooltip="The frame count from Kitsu for this shot, before handles are added. Every layer in this shot shares this number.">?</span>
+                  </label>
+                  <input id="shared-expected-frames" type="text" class="field-select" placeholder="e.g. 45">
+                </div>
+              </div>
+
               <div class="layer-stack-header">
                 <span class="field-label" style="margin:0;">Layers</span>
                 <button id="add-layer-button" class="small-button" type="button">+ Add Layer</button>
@@ -203,7 +231,8 @@
         <div class="section-toggle-group">
           <label class="section-toggle-header">
             <input type="checkbox" id="work-enabled">
-            <span>Work</span>
+            <span>WORK (Full Project Files)</span>
+            <span class="info-icon" tabindex="0" data-tooltip="The full project folder for whatever software was used, like an entire Dragonframe project, not just the final frames.">?</span>
           </label>
           <div id="work-content" class="section-toggle-content hidden">
             <div class="next-note">Work folder upload coming in the next slice.</div>
@@ -215,7 +244,9 @@
         <div id="upload-status" class="upload-status"></div>
       </div>
 
-      <div class="smanim-right">
+      <div class="smanim-divider" id="smanim-divider"></div>
+
+      <div class="smanim-right" id="smanim-right">
         <div id="tree-root" class="tree-root"></div>
       </div>
 
