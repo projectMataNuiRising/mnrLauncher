@@ -10,6 +10,9 @@ name: Build Windows Installer
 on:
   push:
     branches: [ main ]
+    paths:
+      - 'bootstrap/**'
+      - '.github/workflows/build.yml'
   workflow_dispatch:
 
 jobs:
