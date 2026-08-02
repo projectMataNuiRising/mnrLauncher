@@ -25,6 +25,7 @@ import os
 import sys
 import json
 import time
+import shutil
 import platform
 
 import webview
@@ -362,6 +363,120 @@ class MnrApi:
         except Exception:
             pass
         return {"ok": True}
+
+    # --------------------------------------------------------
+    # File browsing (native OS picker, since a webview cannot read the
+    # local filesystem on its own) and the real Stop Motion publish
+    # upload: copies and renames the chosen local files into
+    # .../smAnim/export/publish/media/ following the MNR naming
+    # convention.
+    # --------------------------------------------------------
+
+    def browse_files(self, multiple=True):
+        """Opens a native file picker and returns the chosen absolute path(s)."""
+        try:
+            result = webview.windows[0].create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=multiple,
+            )
+            if not result:
+                return {"ok": True, "paths": []}
+            return {"ok": True, "paths": list(result)}
+        except Exception as e:
+            return {"ok": False, "detail": str(e)}
+
+    def upload_layer_publish(self, payload):
+        """
+        payload: {
+          "shot_parts": [project, "03-shot", episode, sequence, shot],
+          "base_name": "BFP102_SQ04_SH08_smAnim_gali01-main_v001",
+          "mp4": {"enabled": bool, "path": str or null},
+          "raw": {"enabled": bool, "paths": [str], "handle_front": int},
+          "jpeg": {"enabled": bool, "paths": [str], "handle_front": int},
+          "production_data": {"enabled": bool, "paths": [str]},
+        }
+        Copies (never moves) the selected local files into the shot's
+        publish/media folder, renamed to match the MNR convention.
+        Returns a per-section result summary.
+        """
+        try:
+            root = get_pcloud_root()
+            media_dir = os.path.join(
+                root, "01-projects", *payload["shot_parts"],
+                "smAnim", "export", "publish", "media",
+            )
+            os.makedirs(media_dir, exist_ok=True)
+        except Exception as e:
+            return {"ok": False, "detail": f"Could not prepare the media folder: {e}"}
+
+        base_name = payload["base_name"]
+        results = {}
+
+        # ---- mp4 / mov preview (single file) ----
+        mp4 = payload.get("mp4") or {}
+        if mp4.get("enabled") and mp4.get("path"):
+            try:
+                src = mp4["path"]
+                ext = os.path.splitext(src)[1] or ".mp4"
+                dest = os.path.join(media_dir, f"{base_name}{ext}")
+                shutil.copy2(src, dest)
+                results["mp4"] = {"ok": True, "detail": os.path.basename(dest)}
+            except Exception as e:
+                results["mp4"] = {"ok": False, "detail": str(e)}
+
+        # ---- raw / jpeg image sequences ----
+        for section_key in ("raw", "jpeg"):
+            section = payload.get(section_key) or {}
+            if not section.get("enabled") or not section.get("paths"):
+                continue
+            try:
+                results[section_key] = self._copy_frame_sequence(media_dir, base_name, section)
+            except Exception as e:
+                results[section_key] = {"ok": False, "detail": str(e)}
+
+        # ---- production data (dump, original names, no renaming) ----
+        prod = payload.get("production_data") or {}
+        if prod.get("enabled") and prod.get("paths"):
+            try:
+                prod_dir = os.path.join(media_dir, f"{base_name}-productionData")
+                os.makedirs(prod_dir, exist_ok=True)
+                copied = 0
+                for src in prod["paths"]:
+                    dest = os.path.join(prod_dir, os.path.basename(src))
+                    shutil.copy2(src, dest)
+                    copied += 1
+                results["production_data"] = {"ok": True, "detail": f"{copied} file(s)"}
+            except Exception as e:
+                results["production_data"] = {"ok": False, "detail": str(e)}
+
+        return {"ok": True, "results": results}
+
+    def _copy_frame_sequence(self, media_dir, base_name, section):
+        """
+        Renames an image sequence to <base_name>.<frame>.<ext> inside a
+        subfolder named after the file type (e.g. cr3, jpg), starting
+        the frame count at 1001 minus the front handle, exactly like:
+        handle 3/6 means their frame 1 becomes our frame 998, and their
+        4th frame becomes our frame 1001.
+        """
+        paths = section["paths"]
+        handle_front = int(section.get("handle_front") or 0)
+        ext = os.path.splitext(paths[0])[1].lstrip(".").lower() or "seq"
+
+        seq_folder = os.path.join(media_dir, base_name, ext)
+        os.makedirs(seq_folder, exist_ok=True)
+
+        start_frame = 1001 - handle_front
+        copied = 0
+        for i, src in enumerate(paths):
+            frame_number = start_frame + i
+            src_ext = os.path.splitext(src)[1]
+            dest_name = f"{base_name}.{frame_number:04d}{src_ext}"
+            dest = os.path.join(seq_folder, dest_name)
+            shutil.copy2(src, dest)
+            copied += 1
+
+        return {"ok": True, "detail": f"{copied} frame(s) into {ext}/"}
 
 
 # ------------------------------------------------------------
