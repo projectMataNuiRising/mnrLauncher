@@ -40,6 +40,11 @@ except ImportError:
 APP_NAME = "MNR Launcher"
 APP_VERSION = "0.1.0-stage1"
 
+# Set by bootstrap/launcher.py before it runs this file, so the UI can
+# show which compiled shell version is currently running. Defaults to
+# "dev" when main.py is run directly (not through the installed shell).
+SHELL_VERSION = os.environ.get("MNR_SHELL_VERSION", "dev")
+
 # ------------------------------------------------------------
 # Paths
 # ------------------------------------------------------------
@@ -210,7 +215,7 @@ def _sample_io_bytes(proc):
 class MnrApi:
 
     def get_app_info(self):
-        return {"name": APP_NAME, "version": APP_VERSION}
+        return {"name": APP_NAME, "version": APP_VERSION, "shell_version": SHELL_VERSION}
 
     def check_drive(self):
         """
