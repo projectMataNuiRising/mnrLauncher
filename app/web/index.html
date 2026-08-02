@@ -25,6 +25,10 @@
       </div>
     </div>
     <div class="topbar-right">
+      <label class="debug-toggle">
+        <input type="checkbox" id="debug-toggle">
+        Debug
+      </label>
       <button id="refresh-button" class="icon-button" title="Fetch the latest version from GitHub">
         <span class="icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
@@ -37,6 +41,13 @@
         <span id="user-label">Select user</span>
       </button>
     </div>
+  </div>
+
+  <!-- Debug log panel, shows what the app (and the installed shell,
+       before this window even opened) has actually been doing -->
+  <div id="debug-panel" class="debug-panel hidden">
+    <div class="debug-panel-header">Debug Log</div>
+    <div id="debug-log" class="debug-log"></div>
   </div>
 
   <!-- Boot screen -->
@@ -195,6 +206,9 @@
             <div class="next-note">Work folder upload coming in the next slice.</div>
           </div>
         </div>
+
+        <button id="upload-button" class="upload-button" type="button" disabled>Upload</button>
+        <div id="upload-status" class="upload-status"></div>
       </div>
 
       <div class="smanim-right">
