@@ -9,6 +9,7 @@ const screens = {
   user: document.getElementById("user-screen"),
   home: document.getElementById("home-screen"),
   placeholder: document.getElementById("placeholder-screen"),
+  smanim: document.getElementById("smanim-screen"),
 };
 
 const topbar = document.getElementById("topbar");
@@ -35,7 +36,9 @@ const refreshButton = document.getElementById("refresh-button");
 const debugToggle = document.getElementById("debug-toggle");
 const debugPanel = document.getElementById("debug-panel");
 const debugLogEl = document.getElementById("debug-log");
+const debugCopyButton = document.getElementById("debug-copy-button");
 let debugPollInterval = null;
+let lastDebugLogText = "";
 const exportEnabled = document.getElementById("export-enabled");
 const exportContent = document.getElementById("export-content");
 const exportType = document.getElementById("export-type");
@@ -501,13 +504,26 @@ refreshButton.addEventListener("click", async () => {
 async function refreshDebugLog() {
   try {
     const result = await window.pywebview.api.get_debug_log();
+    const newText = result.lines.join("\n");
+    if (newText === lastDebugLogText) return; // nothing changed, leave the DOM (and any selection) alone
+    lastDebugLogText = newText;
     const wasScrolledToBottom = debugLogEl.scrollHeight - debugLogEl.scrollTop <= debugLogEl.clientHeight + 20;
-    debugLogEl.textContent = result.lines.join("\n");
+    debugLogEl.textContent = newText;
     if (wasScrolledToBottom) debugLogEl.scrollTop = debugLogEl.scrollHeight;
   } catch (e) {
     debugLogEl.textContent = "Could not reach the debug log: " + e;
   }
 }
+
+debugCopyButton.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(lastDebugLogText);
+    debugCopyButton.textContent = "Copied!";
+  } catch (e) {
+    debugCopyButton.textContent = "Copy failed";
+  }
+  setTimeout(() => { debugCopyButton.textContent = "Copy"; }, 1500);
+});
 
 debugToggle.addEventListener("change", () => {
   debugPanel.classList.toggle("hidden", !debugToggle.checked);

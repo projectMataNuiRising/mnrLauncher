@@ -46,7 +46,10 @@
   <!-- Debug log panel, shows what the app (and the installed shell,
        before this window even opened) has actually been doing -->
   <div id="debug-panel" class="debug-panel hidden">
-    <div class="debug-panel-header">Debug Log</div>
+    <div class="debug-panel-header">
+      <span>Debug Log</span>
+      <button id="debug-copy-button" class="small-button" type="button">Copy</button>
+    </div>
     <div id="debug-log" class="debug-log"></div>
   </div>
 
