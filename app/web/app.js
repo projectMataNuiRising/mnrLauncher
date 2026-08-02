@@ -12,6 +12,7 @@ const screens = {
 };
 
 const topbar = document.getElementById("topbar");
+const homeButton = document.getElementById("home-button");
 const bootLines = document.getElementById("boot-lines");
 const statusPill = document.getElementById("pcloud-status");
 const userButton = document.getElementById("user-button");
@@ -65,11 +66,11 @@ async function pollTransferActivity() {
   try {
     const result = await window.pywebview.api.check_transfer_activity(1.0);
     if (result.state === "busy") {
-      setStatusPill("busy", "⚠ Transfers in progress, do not disconnect pCloud");
+      setStatusPill("busy", "Transfers in progress, do not disconnect pCloud");
     } else if (result.state === "idle") {
-      setStatusPill("ok", "✅ pCloud all clear");
+      setStatusPill("ok", "pCloud all clear");
     } else {
-      setStatusPill("ok", "✅ pCloud connected");
+      setStatusPill("ok", "pCloud connected");
     }
   } catch (e) {
     // Do not break the UI if the heuristic fails, just leave the last state.
@@ -111,7 +112,7 @@ async function runBoot() {
   await wait(350);
 
   topbar.classList.remove("hidden");
-  setStatusPill("ok", "✅ pCloud all clear");
+  setStatusPill("ok", "pCloud all clear");
   pollTransferActivity();
   setInterval(pollTransferActivity, 20000);
 
@@ -157,6 +158,10 @@ userButton.addEventListener("click", () => {
   renderUserList(allUsers);
   userSearch.value = "";
   showScreen("user");
+});
+
+homeButton.addEventListener("click", () => {
+  showScreen("home");
 });
 
 document.querySelectorAll(".tile").forEach(tile => {
@@ -324,6 +329,9 @@ async function refreshTree() {
   await buildLevel(treeRoot, [], autoPath);
 }
 
+const TREE_FOLDER_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6z"/></svg>';
+const TREE_FILE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h9l5 5v15H6V2z"/><path d="M14 2v6h6"/></svg>';
+
 function makeRow(name, isDir, depth) {
   const row = document.createElement("div");
   row.className = "tree-row";
@@ -336,7 +344,7 @@ function makeRow(name, isDir, depth) {
 
   const icon = document.createElement("span");
   icon.className = "tree-icon";
-  icon.textContent = isDir ? "📁" : "📄";
+  icon.innerHTML = isDir ? TREE_FOLDER_SVG : TREE_FILE_SVG;
   row.appendChild(icon);
 
   const label = document.createElement("span");
@@ -427,7 +435,6 @@ window.addEventListener("pywebviewready", runBoot);
 
 refreshButton.addEventListener("click", async () => {
   refreshButton.disabled = true;
-  refreshButton.textContent = "⏳";
   // request_refresh closes this window; the installed shell notices
   // and re-downloads the latest code from GitHub before reopening.
   await window.pywebview.api.request_refresh();
