@@ -1549,6 +1549,9 @@ const archiveLeft = document.getElementById("archive-left");
 const archiveDivider = document.getElementById("archive-divider");
 const archiveRight = document.getElementById("archive-right");
 const archiveTreeRoot = document.getElementById("archive-tree-root");
+const archiveOverrideToggle = document.getElementById("archive-override-toggle");
+const archiveOverrideNote = document.getElementById("archive-override-note");
+const archiveProjectFilterGroup = document.getElementById("archive-project-filter-group");
 const archiveProjectFilter = document.getElementById("archive-project-filter");
 const archiveQueueList = document.getElementById("archive-queue-list");
 const restoreQueueList = document.getElementById("restore-queue-list");
@@ -1557,9 +1560,25 @@ const archiveDeleteZip = document.getElementById("archive-delete-zip");
 const archiveRunButton = document.getElementById("archive-run-button");
 const archiveStatus = document.getElementById("archive-status");
 
-let archiveQueue = []; // [{pathParts, name}]
+let archiveQueue = []; // [{pathParts, name, fromRoot}]
 let restoreQueue = [];
 let archiveTreeGeneration = 0;
+
+archiveOverrideToggle.addEventListener("change", () => {
+  if (archiveOverrideToggle.checked) {
+    const confirmed = confirm(
+      "This lets you archive or restore ANY folder in pCloud, including pipeline tools, apps, and other critical folders, not just the usual export/publish/media folders.\n\nAre you sure?"
+    );
+    if (!confirmed) {
+      archiveOverrideToggle.checked = false;
+      return;
+    }
+  }
+  const overrideOn = archiveOverrideToggle.checked;
+  archiveOverrideNote.classList.toggle("hidden", !overrideOn);
+  archiveProjectFilterGroup.classList.toggle("hidden", overrideOn);
+  refreshArchiveTree();
+});
 
 archiveBack.addEventListener("click", () => {
   showScreen("home");
@@ -1595,6 +1614,10 @@ async function initArchiveScreen() {
   archiveStatus.innerHTML = "";
   renderArchiveQueues();
 
+  archiveOverrideToggle.checked = false;
+  archiveOverrideNote.classList.add("hidden");
+  archiveProjectFilterGroup.classList.remove("hidden");
+
   const result = await window.pywebview.api.list_projects();
   archiveProjectFilter.innerHTML = "";
   const allOpt = document.createElement("option");
@@ -1618,14 +1641,17 @@ archiveProjectFilter.addEventListener("change", refreshArchiveTree);
 async function refreshArchiveTree() {
   const myGeneration = ++archiveTreeGeneration;
   archiveTreeRoot.innerHTML = "";
-  const rootParts = archiveProjectFilter.value ? [archiveProjectFilter.value] : [];
-  await buildArchiveLevel(archiveTreeRoot, rootParts, myGeneration);
+  const overrideOn = archiveOverrideToggle.checked;
+  const rootParts = overrideOn ? [] : (archiveProjectFilter.value ? [archiveProjectFilter.value] : []);
+  await buildArchiveLevel(archiveTreeRoot, rootParts, myGeneration, overrideOn);
 }
 
 // A folder can be archived only if it sits strictly inside a
 // .../export/publish/media/... folder, not the media folder itself,
 // matching "these specific folders can be archived, not everything".
-function isArchivablePath(pathParts) {
+// Lifted entirely when the full system override is on.
+function isArchivablePath(pathParts, overrideOn) {
+  if (overrideOn) return true;
   for (let i = 0; i + 2 < pathParts.length; i++) {
     if (pathParts[i] === "export" && pathParts[i + 1] === "publish" && pathParts[i + 2] === "media") {
       return pathParts.length > i + 3;
@@ -1646,14 +1672,14 @@ function formatBytes(bytes) {
   return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
-async function buildArchiveLevel(container, pathParts, generation) {
-  const result = await window.pywebview.api.list_dir_entries(pathParts, false);
+async function buildArchiveLevel(container, pathParts, generation, overrideOn) {
+  const result = await window.pywebview.api.list_dir_entries(pathParts, false, overrideOn);
   if (generation !== archiveTreeGeneration) return;
 
   if (!result.ok) {
     const msg = document.createElement("div");
     msg.className = "tree-name tree-missing";
-    msg.textContent = pathParts.length === 0 ? "(could not read 01-projects)" : "(empty)";
+    msg.textContent = pathParts.length === 0 ? "(could not read this location)" : "(empty)";
     container.appendChild(msg);
     return;
   }
@@ -1665,14 +1691,14 @@ async function buildArchiveLevel(container, pathParts, generation) {
     container.appendChild(row);
 
     const isZip = !item.is_dir && item.name.toLowerCase().endsWith(".zip");
-    const isArchivableFolder = item.is_dir && isArchivablePath(nextParts);
+    const isArchivableFolder = item.is_dir && isArchivablePath(nextParts, overrideOn);
 
     if (item.is_dir) {
       const sizeSpan = document.createElement("span");
       sizeSpan.className = "tree-size";
       sizeSpan.textContent = "";
       row.appendChild(sizeSpan);
-      window.pywebview.api.get_folder_size(nextParts).then(sizeResult => {
+      window.pywebview.api.get_folder_size(nextParts, overrideOn).then(sizeResult => {
         if (sizeResult.ok) sizeSpan.textContent = `(${formatBytes(sizeResult.bytes)})`;
       });
     }
@@ -1684,7 +1710,7 @@ async function buildArchiveLevel(container, pathParts, generation) {
       btn.textContent = "Archive";
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
-        addToArchiveQueue(nextParts, item.name);
+        addToArchiveQueue(nextParts, item.name, overrideOn);
       });
       row.appendChild(btn);
     } else if (isZip) {
@@ -1694,7 +1720,7 @@ async function buildArchiveLevel(container, pathParts, generation) {
       btn.textContent = "Restore";
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
-        addToRestoreQueue(nextParts, item.name);
+        addToRestoreQueue(nextParts, item.name, overrideOn);
       });
       row.appendChild(btn);
     }
@@ -1712,7 +1738,7 @@ async function buildArchiveLevel(container, pathParts, generation) {
       toggle.textContent = expanded ? "\u25bc" : "\u25b6";
       childrenContainer.style.display = expanded ? "block" : "none";
       if (expanded && childrenContainer.childElementCount === 0) {
-        await buildArchiveLevel(childrenContainer, nextParts, generation);
+        await buildArchiveLevel(childrenContainer, nextParts, generation, overrideOn);
       }
     }
 
@@ -1720,22 +1746,22 @@ async function buildArchiveLevel(container, pathParts, generation) {
       row.addEventListener("click", () => doExpand());
     } else {
       row.addEventListener("dblclick", async () => {
-        const res = await window.pywebview.api.open_path(nextParts);
+        const res = await window.pywebview.api.open_path(nextParts, overrideOn);
         if (!res.ok) console.error("open_path failed", res.detail);
       });
     }
   }
 }
 
-function addToArchiveQueue(pathParts, name) {
+function addToArchiveQueue(pathParts, name, fromRoot) {
   if (archiveQueue.some(q => q.pathParts.join("/") === pathParts.join("/"))) return;
-  archiveQueue.push({ pathParts, name });
+  archiveQueue.push({ pathParts, name, fromRoot });
   renderArchiveQueues();
 }
 
-function addToRestoreQueue(pathParts, name) {
+function addToRestoreQueue(pathParts, name, fromRoot) {
   if (restoreQueue.some(q => q.pathParts.join("/") === pathParts.join("/"))) return;
-  restoreQueue.push({ pathParts, name });
+  restoreQueue.push({ pathParts, name, fromRoot });
   renderArchiveQueues();
 }
 
@@ -1814,7 +1840,7 @@ archiveRunButton.addEventListener("click", async () => {
 
   for (const entry of archiveQueue) {
     addArchiveStatusLine(`Archiving ${entry.name}...`, "info");
-    const result = await window.pywebview.api.archive_folder(entry.pathParts, deleteSource);
+    const result = await window.pywebview.api.archive_folder(entry.pathParts, deleteSource, entry.fromRoot);
     addArchiveStatusLine(
       result.ok ? `[OK] ${entry.name} \u2192 ${result.detail}` : `[FAIL] ${entry.name}: ${result.detail}`,
       result.ok ? "ok" : "fail"
@@ -1823,7 +1849,7 @@ archiveRunButton.addEventListener("click", async () => {
 
   for (const entry of restoreQueue) {
     addArchiveStatusLine(`Restoring ${entry.name}...`, "info");
-    const result = await window.pywebview.api.dearchive_zip(entry.pathParts, deleteZip);
+    const result = await window.pywebview.api.dearchive_zip(entry.pathParts, deleteZip, entry.fromRoot);
     addArchiveStatusLine(
       result.ok ? `[OK] ${entry.name} \u2192 ${result.detail}` : `[FAIL] ${entry.name}: ${result.detail}`,
       result.ok ? "ok" : "fail"

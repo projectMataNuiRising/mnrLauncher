@@ -287,6 +287,20 @@ def _sample_io_bytes(proc):
         return None
 
 
+def _resolve_pcloud_path(relative_parts, from_root=False):
+    """
+    Normal mode: paths are relative to 01-projects, exactly as every
+    other tool in the app already works. Override mode: paths are
+    relative to the pCloud drive root itself, so literally anything on
+    the drive can be reached, used only by the Archive/Restore tool's
+    explicit, off-by-default override toggle.
+    """
+    root = get_pcloud_root()
+    if from_root:
+        return os.path.join(root, *relative_parts)
+    return os.path.join(root, "01-projects", *relative_parts)
+
+
 # ------------------------------------------------------------
 # API exposed to the web UI (called as window.pywebview.api.X(...) in JS)
 # ------------------------------------------------------------
@@ -457,14 +471,14 @@ class MnrApi:
     # the user expands nodes, rather than scanning the whole tree up front.
     # --------------------------------------------------------
 
-    def list_dir_entries(self, relative_parts, show_hidden=False):
+    def list_dir_entries(self, relative_parts, show_hidden=False, from_root=False):
         """
-        relative_parts is a list of path segments under 01-projects.
+        relative_parts is a list of path segments under 01-projects,
+        or under the pCloud drive root itself when from_root is True.
         Returns files and folders (folders first), each tagged with
         whether it is a "#" hidden pipeline folder.
         """
-        root = get_pcloud_root()
-        base = os.path.join(root, "01-projects", *relative_parts)
+        base = _resolve_pcloud_path(relative_parts, from_root)
         entries = _safe_listdir(base)
         if entries is None:
             return {"ok": False, "items": [], "detail": f"Folder not found: {base}"}
@@ -486,10 +500,9 @@ class MnrApi:
         items.sort(key=lambda i: (not i["is_dir"], i["name"].lower()))
         return {"ok": True, "items": items}
 
-    def open_path(self, relative_parts):
+    def open_path(self, relative_parts, from_root=False):
         """Double-click behaviour: open a file or folder with the OS default app."""
-        root = get_pcloud_root()
-        full = os.path.join(root, "01-projects", *relative_parts)
+        full = _resolve_pcloud_path(relative_parts, from_root)
         try:
             system = platform.system()
             if system == "Windows":
@@ -514,9 +527,8 @@ class MnrApi:
     # exactly, no nested duplicate folder on the way back out.
     # --------------------------------------------------------
 
-    def get_folder_size(self, relative_parts):
-        root = get_pcloud_root()
-        full = os.path.join(root, "01-projects", *relative_parts)
+    def get_folder_size(self, relative_parts, from_root=False):
+        full = _resolve_pcloud_path(relative_parts, from_root)
         total = 0
         try:
             for dirpath, _dirnames, filenames in os.walk(full):
@@ -529,9 +541,8 @@ class MnrApi:
         except Exception as e:
             return {"ok": False, "detail": str(e)}
 
-    def archive_folder(self, relative_parts, delete_source=True):
-        root = get_pcloud_root()
-        folder_path = os.path.join(root, "01-projects", *relative_parts)
+    def archive_folder(self, relative_parts, delete_source=True, from_root=False):
+        folder_path = _resolve_pcloud_path(relative_parts, from_root)
 
         if not os.path.isdir(folder_path):
             return {"ok": False, "detail": "Folder not found"}
@@ -564,9 +575,8 @@ class MnrApi:
 
         return {"ok": True, "detail": os.path.basename(zip_path)}
 
-    def dearchive_zip(self, relative_parts, delete_archive=True):
-        root = get_pcloud_root()
-        zip_path = os.path.join(root, "01-projects", *relative_parts)
+    def dearchive_zip(self, relative_parts, delete_archive=True, from_root=False):
+        zip_path = _resolve_pcloud_path(relative_parts, from_root)
 
         if not os.path.isfile(zip_path) or not zip_path.lower().endswith(".zip"):
             return {"ok": False, "detail": "Not a zip file"}

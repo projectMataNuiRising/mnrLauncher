@@ -327,7 +327,13 @@
           Home
         </button>
 
-        <div class="field-group">
+        <label class="checkbox-row">
+          <input type="checkbox" id="archive-override-toggle">
+          Full system override
+        </label>
+        <div id="archive-override-note" class="next-note hidden">Browsing the entire pCloud drive. Any folder can be archived, not just export/publish/media folders. Be careful.</div>
+
+        <div class="field-group" id="archive-project-filter-group">
           <label class="field-label">Project</label>
           <select id="archive-project-filter" class="field-select">
             <option value="">All Projects</option>
