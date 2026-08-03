@@ -1649,8 +1649,13 @@ async function refreshArchiveTree() {
 // A folder can be archived only if it sits strictly inside a
 // .../export/publish/media/... folder, not the media folder itself,
 // matching "these specific folders can be archived, not everything".
-// Lifted entirely when the full system override is on.
+// Lifted entirely when the full system override is on, except for
+// the top-level pipeline folders themselves (00-temp, 01-projects,
+// 02-pipeline, etc), those are never archivable under any mode.
+const TOP_LEVEL_NUMBERED_RE = /^\d{2}-/;
+
 function isArchivablePath(pathParts, overrideOn) {
+  if (pathParts.length === 1 && TOP_LEVEL_NUMBERED_RE.test(pathParts[0])) return false;
   if (overrideOn) return true;
   for (let i = 0; i + 2 < pathParts.length; i++) {
     if (pathParts[i] === "export" && pathParts[i + 1] === "publish" && pathParts[i + 2] === "media") {
@@ -1804,7 +1809,9 @@ function renderArchiveQueues() {
       row.className = "file-item";
       const name = document.createElement("span");
       name.className = "file-item-name";
-      name.textContent = entry.name;
+      const fullPath = entry.pathParts.join("/");
+      name.textContent = fullPath;
+      name.title = fullPath;
       const removeBtn = document.createElement("button");
       removeBtn.type = "button";
       removeBtn.className = "file-item-remove";
@@ -1831,7 +1838,9 @@ function renderArchiveQueues() {
       row.className = "file-item";
       const name = document.createElement("span");
       name.className = "file-item-name";
-      name.textContent = entry.name;
+      const fullPath = entry.pathParts.join("/");
+      name.textContent = fullPath;
+      name.title = fullPath;
       const removeBtn = document.createElement("button");
       removeBtn.type = "button";
       removeBtn.className = "file-item-remove";
@@ -1863,6 +1872,7 @@ const archiveProgressBar = document.getElementById("archive-progress-bar");
 const archiveProgressPercent = document.getElementById("archive-progress-percent");
 const archiveProgressEta = document.getElementById("archive-progress-eta");
 const archiveProgressCurrent = document.getElementById("archive-progress-current");
+const archiveCancelButton = document.getElementById("archive-cancel-button");
 
 function formatEta(seconds) {
   if (seconds == null || !isFinite(seconds)) return "";
@@ -1874,14 +1884,33 @@ function formatEta(seconds) {
   return `~${minutes}m ${secs}s remaining`;
 }
 
+// While a run is active, block leaving this screen entirely, since
+// walking away mid-archive is exactly what could leave things in a
+// half-finished state. Home, Refresh, and the user switcher all live
+// in the persistent topbar rather than this screen, so they need
+// locking too, not just the Back button here.
+function setArchiveNavigationLocked(locked) {
+  archiveBack.disabled = locked;
+  homeButton.disabled = locked;
+  refreshButton.disabled = locked;
+  userButton.disabled = locked;
+}
+
 archiveRunButton.addEventListener("click", async () => {
   archiveRunButton.disabled = true;
   archiveStatus.innerHTML = "";
+  setArchiveNavigationLocked(true);
+
   archiveProgressWrap.classList.remove("hidden");
+  archiveCancelButton.disabled = false;
+  archiveCancelButton.textContent = "Cancel";
   archiveProgressBar.style.width = "0%";
   archiveProgressPercent.textContent = "0%";
   archiveProgressEta.textContent = "";
-  archiveProgressCurrent.textContent = "Getting ready...";
+  // Figuring out the total size can itself take a while for very
+  // large folders, this message covers that phase specifically, before
+  // any real progress percentage exists yet to show.
+  archiveProgressCurrent.textContent = "Calculating total size... this can take a while for large folders, still working.";
 
   const deleteSource = archiveDeleteSource.checked;
   const deleteZip = archiveDeleteZip.checked;
@@ -1891,6 +1920,7 @@ archiveRunButton.addEventListener("click", async () => {
   const startResult = await window.pywebview.api.run_archive_queue(archiveItems, restoreItems, deleteSource, deleteZip);
   if (!startResult.ok) {
     archiveProgressWrap.classList.add("hidden");
+    setArchiveNavigationLocked(false);
     addArchiveStatusLine(`Could not start: ${startResult.detail}`, "fail");
     archiveRunButton.disabled = false;
     return;
@@ -1901,11 +1931,16 @@ archiveRunButton.addEventListener("click", async () => {
     archiveProgressBar.style.width = `${progress.percent}%`;
     archiveProgressPercent.textContent = `${progress.percent}%`;
     archiveProgressEta.textContent = formatEta(progress.eta_seconds);
-    archiveProgressCurrent.textContent = progress.current_item;
+    archiveProgressCurrent.textContent = progress.current_item || archiveProgressCurrent.textContent;
 
     if (progress.done) {
       clearInterval(pollInterval);
       archiveProgressWrap.classList.add("hidden");
+      setArchiveNavigationLocked(false);
+
+      if (progress.cancelled) {
+        addArchiveStatusLine("Cancelled. Anything already finished stays done, the item in progress was cleaned up and left untouched.", "info");
+      }
       progress.results.forEach(r => {
         addArchiveStatusLine(
           r.ok ? `[OK] ${r.name} \u2192 ${r.detail}` : `[FAIL] ${r.name}: ${r.detail}`,
@@ -1918,4 +1953,11 @@ archiveRunButton.addEventListener("click", async () => {
       await refreshArchiveTree();
     }
   }, 500);
+
+  archiveCancelButton.onclick = async () => {
+    archiveCancelButton.disabled = true;
+    archiveCancelButton.textContent = "Cancelling...";
+    archiveProgressCurrent.textContent = "Cancelling, cleaning up the item currently in progress...";
+    await window.pywebview.api.cancel_archive_queue();
+  };
 });

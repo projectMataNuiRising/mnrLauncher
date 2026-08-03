@@ -313,12 +313,23 @@ def _resolve_pcloud_path(relative_parts, from_root=False):
 _ARCHIVE_PROGRESS = {
     "active": False,
     "done": False,
+    "cancelled": False,
+    "cancel_requested": False,
     "total_bytes": 0,
     "processed_bytes": 0,
     "current_item": "",
     "started_at": 0,
     "results": [],
 }
+
+
+class _ArchiveCancelled(Exception):
+    pass
+
+
+def _check_cancel():
+    if _ARCHIVE_PROGRESS["cancel_requested"]:
+        raise _ArchiveCancelled()
 
 
 def _folder_byte_size(path):
@@ -333,83 +344,112 @@ def _folder_byte_size(path):
 
 
 def _run_archive_queue_worker(archive_items, restore_items, delete_source, delete_zip):
-    for item in archive_items:
-        path_parts = item.get("pathParts", [])
-        name = item.get("name", "")
-        from_root = bool(item.get("fromRoot", False))
-        folder_path = _resolve_pcloud_path(path_parts, from_root)
-        _ARCHIVE_PROGRESS["current_item"] = f"Archiving {name}..."
+    try:
+        for item in archive_items:
+            path_parts = item.get("pathParts", [])
+            name = item.get("name", "")
+            from_root = bool(item.get("fromRoot", False))
+            folder_path = _resolve_pcloud_path(path_parts, from_root)
+            _ARCHIVE_PROGRESS["current_item"] = f"Archiving {name}..."
+            _check_cancel()
 
-        if not os.path.isdir(folder_path):
-            _ARCHIVE_PROGRESS["results"].append({"name": name, "ok": False, "detail": "Folder not found"})
-            continue
+            if not os.path.isdir(folder_path):
+                _ARCHIVE_PROGRESS["results"].append({"name": name, "ok": False, "detail": "Folder not found"})
+                continue
 
-        zip_path = folder_path.rstrip("\\/") + ".zip"
-        if os.path.exists(zip_path):
-            _ARCHIVE_PROGRESS["results"].append({"name": name, "ok": False, "detail": "A zip with that name already exists here"})
-            continue
+            zip_path = folder_path.rstrip("\\/") + ".zip"
+            if os.path.exists(zip_path):
+                _ARCHIVE_PROGRESS["results"].append({"name": name, "ok": False, "detail": "A zip with that name already exists here"})
+                continue
 
-        ok, detail = True, os.path.basename(zip_path)
-        try:
-            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as zf:
-                for dirpath, _dirnames, filenames in os.walk(folder_path):
-                    for fname in filenames:
-                        file_full = os.path.join(dirpath, fname)
-                        arcname = os.path.relpath(file_full, folder_path)
-                        zf.write(file_full, arcname)
-                        try:
-                            _ARCHIVE_PROGRESS["processed_bytes"] += os.path.getsize(file_full)
-                        except Exception:
-                            pass
-        except Exception as e:
-            ok, detail = False, f"Zip creation failed: {e}"
+            ok, detail = True, os.path.basename(zip_path)
             try:
-                if os.path.exists(zip_path):
+                with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as zf:
+                    for dirpath, _dirnames, filenames in os.walk(folder_path):
+                        for fname in filenames:
+                            _check_cancel()
+                            file_full = os.path.join(dirpath, fname)
+                            arcname = os.path.relpath(file_full, folder_path)
+                            zf.write(file_full, arcname)
+                            try:
+                                _ARCHIVE_PROGRESS["processed_bytes"] += os.path.getsize(file_full)
+                            except Exception:
+                                pass
+            except _ArchiveCancelled:
+                # Delete the incomplete zip, the source folder was
+                # never touched at this point, so it is already exactly
+                # back to how it was, nothing further to undo.
+                try:
+                    if os.path.exists(zip_path):
+                        os.remove(zip_path)
+                except Exception:
+                    pass
+                _ARCHIVE_PROGRESS["results"].append({"name": name, "ok": False, "detail": "Cancelled, original folder untouched"})
+                raise
+            except Exception as e:
+                ok, detail = False, f"Zip creation failed: {e}"
+                try:
+                    if os.path.exists(zip_path):
+                        os.remove(zip_path)
+                except Exception:
+                    pass
+
+            if ok and delete_source:
+                try:
+                    shutil.rmtree(folder_path)
+                except Exception as e:
+                    detail = f"Zipped, but could not delete the original folder: {e}"
+
+            _ARCHIVE_PROGRESS["results"].append({"name": name, "ok": ok, "detail": detail})
+
+        for item in restore_items:
+            path_parts = item.get("pathParts", [])
+            name = item.get("name", "")
+            from_root = bool(item.get("fromRoot", False))
+            zip_path = _resolve_pcloud_path(path_parts, from_root)
+            _ARCHIVE_PROGRESS["current_item"] = f"Restoring {name}..."
+            _check_cancel()
+
+            if not os.path.isfile(zip_path) or not zip_path.lower().endswith(".zip"):
+                _ARCHIVE_PROGRESS["results"].append({"name": name, "ok": False, "detail": "Not a zip file"})
+                continue
+
+            dest_folder = zip_path[:-4]
+            if os.path.exists(dest_folder):
+                _ARCHIVE_PROGRESS["results"].append({"name": name, "ok": False, "detail": "A folder with that name already exists here"})
+                continue
+
+            ok, detail = True, os.path.basename(dest_folder)
+            try:
+                os.makedirs(dest_folder, exist_ok=True)
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    for zi in zf.infolist():
+                        _check_cancel()
+                        zf.extract(zi, dest_folder)
+                        _ARCHIVE_PROGRESS["processed_bytes"] += zi.file_size
+            except _ArchiveCancelled:
+                # Delete the partially-extracted folder, the original
+                # zip was never touched, so it is already back to how
+                # it was, nothing further to undo.
+                try:
+                    shutil.rmtree(dest_folder)
+                except Exception:
+                    pass
+                _ARCHIVE_PROGRESS["results"].append({"name": name, "ok": False, "detail": "Cancelled, original zip untouched"})
+                raise
+            except Exception as e:
+                ok, detail = False, f"Extraction failed: {e}"
+
+            if ok and delete_zip:
+                try:
                     os.remove(zip_path)
-            except Exception:
-                pass
+                except Exception as e:
+                    detail = f"Extracted, but could not delete the zip: {e}"
 
-        if ok and delete_source:
-            try:
-                shutil.rmtree(folder_path)
-            except Exception as e:
-                detail = f"Zipped, but could not delete the original folder: {e}"
+            _ARCHIVE_PROGRESS["results"].append({"name": name, "ok": ok, "detail": detail})
 
-        _ARCHIVE_PROGRESS["results"].append({"name": name, "ok": ok, "detail": detail})
-
-    for item in restore_items:
-        path_parts = item.get("pathParts", [])
-        name = item.get("name", "")
-        from_root = bool(item.get("fromRoot", False))
-        zip_path = _resolve_pcloud_path(path_parts, from_root)
-        _ARCHIVE_PROGRESS["current_item"] = f"Restoring {name}..."
-
-        if not os.path.isfile(zip_path) or not zip_path.lower().endswith(".zip"):
-            _ARCHIVE_PROGRESS["results"].append({"name": name, "ok": False, "detail": "Not a zip file"})
-            continue
-
-        dest_folder = zip_path[:-4]
-        if os.path.exists(dest_folder):
-            _ARCHIVE_PROGRESS["results"].append({"name": name, "ok": False, "detail": "A folder with that name already exists here"})
-            continue
-
-        ok, detail = True, os.path.basename(dest_folder)
-        try:
-            os.makedirs(dest_folder, exist_ok=True)
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                for zi in zf.infolist():
-                    zf.extract(zi, dest_folder)
-                    _ARCHIVE_PROGRESS["processed_bytes"] += zi.file_size
-        except Exception as e:
-            ok, detail = False, f"Extraction failed: {e}"
-
-        if ok and delete_zip:
-            try:
-                os.remove(zip_path)
-            except Exception as e:
-                detail = f"Extracted, but could not delete the zip: {e}"
-
-        _ARCHIVE_PROGRESS["results"].append({"name": name, "ok": ok, "detail": detail})
+    except _ArchiveCancelled:
+        _ARCHIVE_PROGRESS["cancelled"] = True
 
     _ARCHIVE_PROGRESS["current_item"] = ""
     _ARCHIVE_PROGRESS["active"] = False
@@ -746,6 +786,8 @@ class MnrApi:
         _ARCHIVE_PROGRESS["current_item"] = ""
         _ARCHIVE_PROGRESS["started_at"] = time.time()
         _ARCHIVE_PROGRESS["done"] = False
+        _ARCHIVE_PROGRESS["cancelled"] = False
+        _ARCHIVE_PROGRESS["cancel_requested"] = False
         _ARCHIVE_PROGRESS["active"] = True
 
         thread = threading.Thread(
@@ -754,6 +796,19 @@ class MnrApi:
             daemon=True,
         )
         thread.start()
+        return {"ok": True}
+
+    def cancel_archive_queue(self):
+        """
+        Asks the background worker to stop as soon as it safely can,
+        checked between every single file rather than only between
+        queue items, so even one huge folder responds quickly. Whatever
+        item was in progress at that moment gets cleaned up: an
+        incomplete zip is deleted, or a partially-extracted folder is
+        deleted, leaving the original exactly as it was either way.
+        Anything already fully completed before this point stays done.
+        """
+        _ARCHIVE_PROGRESS["cancel_requested"] = True
         return {"ok": True}
 
     def get_archive_progress(self):
@@ -772,6 +827,7 @@ class MnrApi:
         return {
             "active": _ARCHIVE_PROGRESS["active"],
             "done": _ARCHIVE_PROGRESS["done"],
+            "cancelled": _ARCHIVE_PROGRESS["cancelled"],
             "percent": percent,
             "current_item": _ARCHIVE_PROGRESS["current_item"],
             "eta_seconds": eta_seconds,
