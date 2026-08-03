@@ -24,6 +24,62 @@ const placeholderText = document.getElementById("placeholder-text");
 const placeholderBack = document.getElementById("placeholder-back");
 const onboardingLink = document.getElementById("onboarding-link");
 const versionBadge = document.getElementById("version-badge");
+const toastEl = document.getElementById("toast");
+const blenderTile = document.getElementById("blender-tile");
+const blenderTileBadge = document.getElementById("blender-tile-badge");
+const blenderNotice = document.getElementById("blender-notice");
+const blenderNoticeClose = document.getElementById("blender-notice-close");
+let toastTimeout = null;
+let blenderPollInterval = null;
+
+function showBlenderNotice() {
+  blenderNotice.classList.remove("hidden");
+  clearInterval(blenderPollInterval);
+  blenderPollInterval = setInterval(async () => {
+    try {
+      const result = await window.pywebview.api.is_blender_running();
+      if (result.ok && result.running) {
+        hideBlenderNotice();
+      }
+    } catch (e) {
+      // Keep waiting quietly, do not spam errors while polling.
+    }
+  }, 4000);
+}
+
+function hideBlenderNotice() {
+  blenderNotice.classList.add("hidden");
+  clearInterval(blenderPollInterval);
+  blenderPollInterval = null;
+}
+
+blenderNoticeClose.addEventListener("click", hideBlenderNotice);
+
+function showToast(text, duration) {
+  toastEl.textContent = text;
+  toastEl.classList.remove("hidden");
+  clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(() => toastEl.classList.add("hidden"), duration || 3000);
+}
+
+async function refreshBlenderTile() {
+  try {
+    const info = await window.pywebview.api.get_blender_info();
+    if (!info.supported) {
+      blenderTileBadge.textContent = "Windows only";
+      blenderTile.classList.add("tile-disabled");
+    } else if (info.ok) {
+      blenderTileBadge.textContent = `v${info.version}`;
+      blenderTile.classList.remove("tile-disabled");
+    } else {
+      blenderTileBadge.textContent = "Not found";
+      blenderTile.classList.add("tile-disabled");
+    }
+  } catch (e) {
+    blenderTileBadge.textContent = "Not found";
+    blenderTile.classList.add("tile-disabled");
+  }
+}
 
 const ddProject = document.getElementById("dd-project");
 const ddEpisode = document.getElementById("dd-episode");
@@ -173,6 +229,7 @@ async function runBoot() {
   setStatusPill("ok", "pCloud - Everything is Up To Date");
   pollTransferActivity();
   setInterval(pollTransferActivity, 20000);
+  refreshBlenderTile();
 
   const savedUser = await window.pywebview.api.get_saved_user();
   if (savedUser && allUsers.includes(savedUser)) {
@@ -223,7 +280,7 @@ homeButton.addEventListener("click", () => {
 });
 
 document.querySelectorAll(".tile").forEach(tile => {
-  tile.addEventListener("click", () => {
+  tile.addEventListener("click", async () => {
     if (tile.classList.contains("tile-disabled")) return;
     const tool = tile.dataset.tool;
     if (tool === "smanim") {
@@ -231,6 +288,13 @@ document.querySelectorAll(".tile").forEach(tile => {
       initSmanimScreen();
     } else if (tool === "external" && tile.dataset.url) {
       window.pywebview.api.open_url(tile.dataset.url);
+    } else if (tool === "blender") {
+      showBlenderNotice();
+      const result = await window.pywebview.api.launch_blender();
+      if (!result.ok) {
+        hideBlenderNotice();
+        showToast(`Could not launch Blender: ${result.detail}`, 5000);
+      }
     }
   });
 });

@@ -23,10 +23,12 @@ Requires (installed into the bundled portable Python, see requirements.txt):
 
 import os
 import sys
+import re
 import json
 import time
 import shutil
 import platform
+import subprocess
 import webbrowser
 
 import webview
@@ -177,6 +179,55 @@ def _safe_listdir(path):
 
 def _is_junk(name):
     return name in _JUNK_NAMES or name.startswith(".")
+
+
+def _find_first_subfolder(path):
+    """
+    Same convention as the existing Blender launch .bat: the first
+    (alphabetically sorted) folder found. Matches "01-latest" always
+    holding exactly one current build folder that gets swapped out.
+    """
+    entries = _safe_listdir(path)
+    if not entries:
+        return None
+    for entry in sorted(entries, key=str.lower):
+        if _is_junk(entry):
+            continue
+        full = os.path.join(path, entry)
+        if os.path.isdir(full):
+            return full
+    return None
+
+
+def _resolve_blender_paths():
+    root = get_pcloud_root()
+    blender_root = os.path.join(root, "02-pipeline", "apps", "blender", "01-latest")
+
+    pipeline_build_dir = _find_first_subfolder(blender_root)
+    if not pipeline_build_dir:
+        return None
+
+    blender_version_dir = _find_first_subfolder(pipeline_build_dir)
+    if not blender_version_dir:
+        return None
+
+    exe_path = os.path.join(blender_version_dir, "blender.exe")
+    if not os.path.isfile(exe_path):
+        return None
+
+    return {
+        "pipeline_build_dir": pipeline_build_dir,
+        "blender_version_dir": blender_version_dir,
+        "exe_path": exe_path,
+    }
+
+
+_BLENDER_VERSION_RE = re.compile(r"blender-([\d.]+)", re.IGNORECASE)
+
+
+def _extract_blender_version(blender_version_dir):
+    match = _BLENDER_VERSION_RE.search(os.path.basename(blender_version_dir))
+    return match.group(1) if match else "?"
 
 
 # ------------------------------------------------------------
@@ -439,6 +490,79 @@ class MnrApi:
             _log(f"open_url: {url}")
             return {"ok": True}
         except Exception as e:
+            return {"ok": False, "detail": str(e)}
+
+    # --------------------------------------------------------
+    # Blender launch. Windows only for now, no Mac/Linux plans. This
+    # always re-scans the shared pipeline folder live, never caching a
+    # path, so dropping in a new Blender build there is picked up
+    # automatically, nothing to update on the MNR Launcher side.
+    # --------------------------------------------------------
+
+    def get_blender_info(self):
+        if platform.system() != "Windows":
+            return {"ok": False, "supported": False, "detail": "Windows only for now"}
+
+        paths = _resolve_blender_paths()
+        if not paths:
+            return {"ok": False, "supported": True, "detail": "No Blender build found in the pipeline folder"}
+
+        version = _extract_blender_version(paths["blender_version_dir"])
+        return {"ok": True, "supported": True, "version": version}
+
+    def is_blender_running(self):
+        """Used by the persistent launch notice to know when to dismiss
+        itself, since a first launch can take a long time waiting on
+        pCloud rather than actually starting quickly."""
+        if not HAS_PSUTIL:
+            return {"ok": False, "detail": "psutil not available"}
+        try:
+            for proc in psutil.process_iter(["name"]):
+                name = (proc.info.get("name") or "").lower()
+                if name == "blender.exe":
+                    return {"ok": True, "running": True}
+            return {"ok": True, "running": False}
+        except Exception as e:
+            return {"ok": False, "detail": str(e)}
+
+    def launch_blender(self):
+        if platform.system() != "Windows":
+            return {"ok": False, "detail": "Windows only for now"}
+
+        paths = _resolve_blender_paths()
+        if not paths:
+            return {"ok": False, "detail": "Could not find a Blender build in the pipeline folder"}
+
+        try:
+            appdata = os.environ.get("APPDATA", os.path.expanduser("~"))
+            resources_dir = os.path.join(appdata, "Blender Foundation", "Blender", "4.2")
+            os.makedirs(resources_dir, exist_ok=True)
+
+            env = os.environ.copy()
+            env["BLENDER_USER_RESOURCES"] = resources_dir
+
+            # Shared, read-only addons every artist gets automatically,
+            # no per-user install. Additive only, if a shared-scripts
+            # folder doesn't exist here yet, Blender just ignores the
+            # unset path, this can't conflict with any other addon
+            # loading mechanism already in place.
+            root = get_pcloud_root()
+            shared_scripts_dir = os.path.join(root, "02-pipeline", "apps", "blender", "shared-scripts")
+            if os.path.isdir(shared_scripts_dir):
+                env["BLENDER_SYSTEM_SCRIPTS"] = shared_scripts_dir
+            # Lets Blender-side pipeline scripts know who is running it,
+            # without asking again, since MNR Launcher already knows.
+            env["MNR_CURRENT_USER"] = read_local_state().get("current_user") or ""
+
+            _log(f"launch_blender: {paths['exe_path']}")
+            subprocess.Popen(
+                [paths["exe_path"], "--app-template", "MNR_Pipeline"],
+                env=env,
+                cwd=paths["blender_version_dir"],
+            )
+            return {"ok": True}
+        except Exception as e:
+            _log(f"launch_blender failed: {e}")
             return {"ok": False, "detail": str(e)}
 
     # --------------------------------------------------------
