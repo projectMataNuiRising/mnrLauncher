@@ -645,14 +645,16 @@ class MnrApi:
     def get_folder_size(self, relative_parts, from_root=False):
         full = _resolve_pcloud_path(relative_parts, from_root)
         total = 0
+        file_count = 0
         try:
             for dirpath, _dirnames, filenames in os.walk(full):
                 for name in filenames:
+                    file_count += 1
                     try:
                         total += os.path.getsize(os.path.join(dirpath, name))
                     except Exception:
                         pass
-            return {"ok": True, "bytes": total}
+            return {"ok": True, "bytes": total, "file_count": file_count}
         except Exception as e:
             return {"ok": False, "detail": str(e)}
 

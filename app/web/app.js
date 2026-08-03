@@ -1672,6 +1672,22 @@ function formatBytes(bytes) {
   return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
+// 0 items reads the same grey as the folder size text, gradually
+// shifting toward red as file count climbs, capping out at 1000
+// items. Uses the app's existing --muted and --red colors so it
+// stays consistent with everything else, rather than pure red.
+const FILE_COUNT_GREY = [0x8b, 0x8d, 0x93];
+const FILE_COUNT_RED = [0xd0, 0x66, 0x6a];
+const FILE_COUNT_HOT_CAP = 1000;
+
+function fileCountColor(count) {
+  const t = Math.min(count / FILE_COUNT_HOT_CAP, 1);
+  const r = Math.round(FILE_COUNT_GREY[0] + (FILE_COUNT_RED[0] - FILE_COUNT_GREY[0]) * t);
+  const g = Math.round(FILE_COUNT_GREY[1] + (FILE_COUNT_RED[1] - FILE_COUNT_GREY[1]) * t);
+  const b = Math.round(FILE_COUNT_GREY[2] + (FILE_COUNT_RED[2] - FILE_COUNT_GREY[2]) * t);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
 async function buildArchiveLevel(container, pathParts, generation, overrideOn) {
   const result = await window.pywebview.api.list_dir_entries(pathParts, false, overrideOn);
   if (generation !== archiveTreeGeneration) return;
@@ -1698,8 +1714,18 @@ async function buildArchiveLevel(container, pathParts, generation, overrideOn) {
       sizeSpan.className = "tree-size";
       sizeSpan.textContent = "";
       row.appendChild(sizeSpan);
+
+      const countSpan = document.createElement("span");
+      countSpan.className = "tree-size";
+      countSpan.textContent = "";
+      row.appendChild(countSpan);
+
       window.pywebview.api.get_folder_size(nextParts, overrideOn).then(sizeResult => {
-        if (sizeResult.ok) sizeSpan.textContent = `(${formatBytes(sizeResult.bytes)})`;
+        if (sizeResult.ok) {
+          sizeSpan.textContent = `(${formatBytes(sizeResult.bytes)})`;
+          countSpan.textContent = `${sizeResult.file_count} items`;
+          countSpan.style.color = fileCountColor(sizeResult.file_count);
+        }
       });
     }
 
