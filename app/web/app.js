@@ -1832,32 +1832,64 @@ function addArchiveStatusLine(text, kind) {
   archiveStatus.appendChild(line);
 }
 
+const archiveProgressWrap = document.getElementById("archive-progress-wrap");
+const archiveProgressBar = document.getElementById("archive-progress-bar");
+const archiveProgressPercent = document.getElementById("archive-progress-percent");
+const archiveProgressEta = document.getElementById("archive-progress-eta");
+const archiveProgressCurrent = document.getElementById("archive-progress-current");
+
+function formatEta(seconds) {
+  if (seconds == null || !isFinite(seconds)) return "";
+  seconds = Math.round(seconds);
+  if (seconds < 5) return "almost done";
+  if (seconds < 60) return `~${seconds}s remaining`;
+  const minutes = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `~${minutes}m ${secs}s remaining`;
+}
+
 archiveRunButton.addEventListener("click", async () => {
   archiveRunButton.disabled = true;
   archiveStatus.innerHTML = "";
+  archiveProgressWrap.classList.remove("hidden");
+  archiveProgressBar.style.width = "0%";
+  archiveProgressPercent.textContent = "0%";
+  archiveProgressEta.textContent = "";
+  archiveProgressCurrent.textContent = "Getting ready...";
+
   const deleteSource = archiveDeleteSource.checked;
   const deleteZip = archiveDeleteZip.checked;
+  const archiveItems = archiveQueue.map(q => ({ pathParts: q.pathParts, name: q.name, fromRoot: q.fromRoot }));
+  const restoreItems = restoreQueue.map(q => ({ pathParts: q.pathParts, name: q.name, fromRoot: q.fromRoot }));
 
-  for (const entry of archiveQueue) {
-    addArchiveStatusLine(`Archiving ${entry.name}...`, "info");
-    const result = await window.pywebview.api.archive_folder(entry.pathParts, deleteSource, entry.fromRoot);
-    addArchiveStatusLine(
-      result.ok ? `[OK] ${entry.name} \u2192 ${result.detail}` : `[FAIL] ${entry.name}: ${result.detail}`,
-      result.ok ? "ok" : "fail"
-    );
+  const startResult = await window.pywebview.api.run_archive_queue(archiveItems, restoreItems, deleteSource, deleteZip);
+  if (!startResult.ok) {
+    archiveProgressWrap.classList.add("hidden");
+    addArchiveStatusLine(`Could not start: ${startResult.detail}`, "fail");
+    archiveRunButton.disabled = false;
+    return;
   }
 
-  for (const entry of restoreQueue) {
-    addArchiveStatusLine(`Restoring ${entry.name}...`, "info");
-    const result = await window.pywebview.api.dearchive_zip(entry.pathParts, deleteZip, entry.fromRoot);
-    addArchiveStatusLine(
-      result.ok ? `[OK] ${entry.name} \u2192 ${result.detail}` : `[FAIL] ${entry.name}: ${result.detail}`,
-      result.ok ? "ok" : "fail"
-    );
-  }
+  const pollInterval = setInterval(async () => {
+    const progress = await window.pywebview.api.get_archive_progress();
+    archiveProgressBar.style.width = `${progress.percent}%`;
+    archiveProgressPercent.textContent = `${progress.percent}%`;
+    archiveProgressEta.textContent = formatEta(progress.eta_seconds);
+    archiveProgressCurrent.textContent = progress.current_item;
 
-  archiveQueue = [];
-  restoreQueue = [];
-  renderArchiveQueues();
-  await refreshArchiveTree();
+    if (progress.done) {
+      clearInterval(pollInterval);
+      archiveProgressWrap.classList.add("hidden");
+      progress.results.forEach(r => {
+        addArchiveStatusLine(
+          r.ok ? `[OK] ${r.name} \u2192 ${r.detail}` : `[FAIL] ${r.name}: ${r.detail}`,
+          r.ok ? "ok" : "fail"
+        );
+      });
+      archiveQueue = [];
+      restoreQueue = [];
+      renderArchiveQueues();
+      await refreshArchiveTree();
+    }
+  }, 500);
 });

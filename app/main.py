@@ -30,6 +30,7 @@ import shutil
 import zipfile
 import platform
 import subprocess
+import threading
 import webbrowser
 
 import webview
@@ -299,6 +300,120 @@ def _resolve_pcloud_path(relative_parts, from_root=False):
     if from_root:
         return os.path.join(root, *relative_parts)
     return os.path.join(root, "01-projects", *relative_parts)
+
+
+# ------------------------------------------------------------
+# Archive/Restore queue runs on a background thread so the UI can show
+# a live byte-based progress bar and estimated time remaining instead
+# of freezing while a big folder zips or unzips. Progress is tracked
+# in bytes rather than item count, since queued folders can vary
+# wildly in size, item count alone would jump unevenly.
+# ------------------------------------------------------------
+
+_ARCHIVE_PROGRESS = {
+    "active": False,
+    "done": False,
+    "total_bytes": 0,
+    "processed_bytes": 0,
+    "current_item": "",
+    "started_at": 0,
+    "results": [],
+}
+
+
+def _folder_byte_size(path):
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(path):
+        for name in filenames:
+            try:
+                total += os.path.getsize(os.path.join(dirpath, name))
+            except Exception:
+                pass
+    return total
+
+
+def _run_archive_queue_worker(archive_items, restore_items, delete_source, delete_zip):
+    for item in archive_items:
+        path_parts = item.get("pathParts", [])
+        name = item.get("name", "")
+        from_root = bool(item.get("fromRoot", False))
+        folder_path = _resolve_pcloud_path(path_parts, from_root)
+        _ARCHIVE_PROGRESS["current_item"] = f"Archiving {name}..."
+
+        if not os.path.isdir(folder_path):
+            _ARCHIVE_PROGRESS["results"].append({"name": name, "ok": False, "detail": "Folder not found"})
+            continue
+
+        zip_path = folder_path.rstrip("\\/") + ".zip"
+        if os.path.exists(zip_path):
+            _ARCHIVE_PROGRESS["results"].append({"name": name, "ok": False, "detail": "A zip with that name already exists here"})
+            continue
+
+        ok, detail = True, os.path.basename(zip_path)
+        try:
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as zf:
+                for dirpath, _dirnames, filenames in os.walk(folder_path):
+                    for fname in filenames:
+                        file_full = os.path.join(dirpath, fname)
+                        arcname = os.path.relpath(file_full, folder_path)
+                        zf.write(file_full, arcname)
+                        try:
+                            _ARCHIVE_PROGRESS["processed_bytes"] += os.path.getsize(file_full)
+                        except Exception:
+                            pass
+        except Exception as e:
+            ok, detail = False, f"Zip creation failed: {e}"
+            try:
+                if os.path.exists(zip_path):
+                    os.remove(zip_path)
+            except Exception:
+                pass
+
+        if ok and delete_source:
+            try:
+                shutil.rmtree(folder_path)
+            except Exception as e:
+                detail = f"Zipped, but could not delete the original folder: {e}"
+
+        _ARCHIVE_PROGRESS["results"].append({"name": name, "ok": ok, "detail": detail})
+
+    for item in restore_items:
+        path_parts = item.get("pathParts", [])
+        name = item.get("name", "")
+        from_root = bool(item.get("fromRoot", False))
+        zip_path = _resolve_pcloud_path(path_parts, from_root)
+        _ARCHIVE_PROGRESS["current_item"] = f"Restoring {name}..."
+
+        if not os.path.isfile(zip_path) or not zip_path.lower().endswith(".zip"):
+            _ARCHIVE_PROGRESS["results"].append({"name": name, "ok": False, "detail": "Not a zip file"})
+            continue
+
+        dest_folder = zip_path[:-4]
+        if os.path.exists(dest_folder):
+            _ARCHIVE_PROGRESS["results"].append({"name": name, "ok": False, "detail": "A folder with that name already exists here"})
+            continue
+
+        ok, detail = True, os.path.basename(dest_folder)
+        try:
+            os.makedirs(dest_folder, exist_ok=True)
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                for zi in zf.infolist():
+                    zf.extract(zi, dest_folder)
+                    _ARCHIVE_PROGRESS["processed_bytes"] += zi.file_size
+        except Exception as e:
+            ok, detail = False, f"Extraction failed: {e}"
+
+        if ok and delete_zip:
+            try:
+                os.remove(zip_path)
+            except Exception as e:
+                detail = f"Extracted, but could not delete the zip: {e}"
+
+        _ARCHIVE_PROGRESS["results"].append({"name": name, "ok": ok, "detail": detail})
+
+    _ARCHIVE_PROGRESS["current_item"] = ""
+    _ARCHIVE_PROGRESS["active"] = False
+    _ARCHIVE_PROGRESS["done"] = True
 
 
 # ------------------------------------------------------------
@@ -600,6 +715,66 @@ class MnrApi:
                 return {"ok": True, "detail": f"Extracted, but could not delete the zip: {e}"}
 
         return {"ok": True, "detail": os.path.basename(dest_folder)}
+
+    def run_archive_queue(self, archive_items, restore_items, delete_source=True, delete_zip=True):
+        """
+        Runs the whole queue on a background thread so the UI can poll
+        get_archive_progress() for a live percentage and ETA instead of
+        freezing. archive_folder/dearchive_zip above still exist for
+        one-off calls, this is the bulk version the Run button uses.
+        """
+        if _ARCHIVE_PROGRESS["active"]:
+            return {"ok": False, "detail": "A previous run is still in progress"}
+
+        total_bytes = 0
+        for item in archive_items:
+            path = _resolve_pcloud_path(item.get("pathParts", []), bool(item.get("fromRoot", False)))
+            if os.path.isdir(path):
+                total_bytes += _folder_byte_size(path)
+        for item in restore_items:
+            path = _resolve_pcloud_path(item.get("pathParts", []), bool(item.get("fromRoot", False)))
+            try:
+                total_bytes += os.path.getsize(path)
+            except Exception:
+                pass
+
+        _ARCHIVE_PROGRESS["total_bytes"] = total_bytes
+        _ARCHIVE_PROGRESS["processed_bytes"] = 0
+        _ARCHIVE_PROGRESS["results"] = []
+        _ARCHIVE_PROGRESS["current_item"] = ""
+        _ARCHIVE_PROGRESS["started_at"] = time.time()
+        _ARCHIVE_PROGRESS["done"] = False
+        _ARCHIVE_PROGRESS["active"] = True
+
+        thread = threading.Thread(
+            target=_run_archive_queue_worker,
+            args=(archive_items, restore_items, delete_source, delete_zip),
+            daemon=True,
+        )
+        thread.start()
+        return {"ok": True}
+
+    def get_archive_progress(self):
+        total = _ARCHIVE_PROGRESS["total_bytes"]
+        processed = _ARCHIVE_PROGRESS["processed_bytes"]
+        elapsed = time.time() - _ARCHIVE_PROGRESS["started_at"] if _ARCHIVE_PROGRESS["started_at"] else 0
+
+        percent = 100 if total <= 0 else min(100, int((processed / total) * 100))
+
+        eta_seconds = None
+        if total > 0 and processed > 0 and elapsed > 1:
+            rate = processed / elapsed
+            if rate > 0:
+                eta_seconds = max(total - processed, 0) / rate
+
+        return {
+            "active": _ARCHIVE_PROGRESS["active"],
+            "done": _ARCHIVE_PROGRESS["done"],
+            "percent": percent,
+            "current_item": _ARCHIVE_PROGRESS["current_item"],
+            "eta_seconds": eta_seconds,
+            "results": list(_ARCHIVE_PROGRESS["results"]),
+        }
 
     # --------------------------------------------------------
     # Refresh: when this app was launched by the installed bootstrap
