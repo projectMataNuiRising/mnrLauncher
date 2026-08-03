@@ -108,6 +108,33 @@ def get_shell_cache_dir():
     return os.path.join(base, "MNR_Launcher", "app_cache")
 
 
+def get_dev_settings_path():
+    """Same file launcher.py's read_dev_settings() reads on every launch."""
+    return os.path.join(get_shell_cache_dir(), "dev_settings.json")
+
+
+def read_dev_settings():
+    try:
+        with open(get_dev_settings_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return {
+            "dev_app_code": bool(data.get("dev_app_code", False)),
+            "dev_exe": bool(data.get("dev_exe", False)),
+        }
+    except Exception:
+        return {"dev_app_code": False, "dev_exe": False}
+
+
+def write_dev_settings(dev_app_code, dev_exe):
+    try:
+        os.makedirs(get_shell_cache_dir(), exist_ok=True)
+        with open(get_dev_settings_path(), "w", encoding="utf-8") as f:
+            json.dump({"dev_app_code": bool(dev_app_code), "dev_exe": bool(dev_exe)}, f)
+        return True
+    except Exception:
+        return False
+
+
 _DEBUG_LOG = []
 
 
@@ -266,7 +293,26 @@ def _sample_io_bytes(proc):
 class MnrApi:
 
     def get_app_info(self):
-        return {"name": APP_NAME, "version": APP_VERSION, "shell_version": SHELL_VERSION}
+        return {
+            "name": APP_NAME,
+            "version": APP_VERSION,
+            "shell_version": SHELL_VERSION,
+            "dev_exe": os.environ.get("MNR_DEV_EXE") == "1",
+            "dev_app_code": os.environ.get("MNR_DEV_APP_CODE") == "1",
+        }
+
+    def get_dev_settings(self):
+        return read_dev_settings()
+
+    def set_dev_settings(self, dev_app_code, dev_exe):
+        write_dev_settings(dev_app_code, dev_exe)
+        _log(f"Dev settings changed: app_code={bool(dev_app_code)} exe={bool(dev_exe)}, restarting...")
+        _REFRESH_STATE["requested"] = True
+        try:
+            webview.windows[0].destroy()
+        except Exception:
+            pass
+        return {"ok": True}
 
     def check_drive(self):
         """

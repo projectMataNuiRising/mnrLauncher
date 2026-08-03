@@ -192,7 +192,9 @@ async function runBoot() {
   onboardingLink.href = ONBOARDING_URL;
 
   window.pywebview.api.get_app_info().then(info => {
-    versionBadge.textContent = `v${info.shell_version}`;
+    const exeLabel = info.dev_exe ? "Dev Build" : "Main Build";
+    const appLabel = info.dev_app_code ? "dev" : "main";
+    versionBadge.textContent = `${exeLabel} v${info.shell_version} \u00b7 app: ${appLabel}`;
   });
 
   addBootLine("Checking pCloud Drive...", "info");
@@ -695,11 +697,39 @@ debugToggle.addEventListener("change", () => {
   if (debugToggle.checked) {
     refreshDebugLog();
     debugPollInterval = setInterval(refreshDebugLog, 1500);
+    refreshDevToggles();
   } else if (debugPollInterval) {
     clearInterval(debugPollInterval);
     debugPollInterval = null;
   }
 });
+
+// ---------------------------------------------------------------
+// Development environment toggles: two independent tracks, one for
+// the compiled shell's self-updater, one for the app code fetched on
+// every launch/refresh. Both default off, and flipping either one
+// relaunches the app on that track immediately.
+// ---------------------------------------------------------------
+
+const devExeToggle = document.getElementById("dev-exe-toggle");
+const devAppToggle = document.getElementById("dev-app-toggle");
+
+async function refreshDevToggles() {
+  try {
+    const settings = await window.pywebview.api.get_dev_settings();
+    devExeToggle.checked = settings.dev_exe;
+    devAppToggle.checked = settings.dev_app_code;
+  } catch (e) {
+    // Leave whatever was last shown, not worth erroring over.
+  }
+}
+
+async function applyDevSettings() {
+  await window.pywebview.api.set_dev_settings(devAppToggle.checked, devExeToggle.checked);
+}
+
+devExeToggle.addEventListener("change", applyDevSettings);
+devAppToggle.addEventListener("change", applyDevSettings);
 
 // ---------------------------------------------------------------
 // Export / Work toggle sections

@@ -1,20 +1,24 @@
 name: Build Windows Installer
 
 # This runs automatically on GitHub's own Windows machines every time
-# code is pushed to main (only when bootstrap/ or this file changes),
-# or can be triggered manually from the Actions tab. It compiles
-# bootstrap/launcher.py into one MNR_Launcher.exe, using a clean full
-# Python install (not the stripped-down portable one artists use),
-# since PyInstaller needs the full standard library to build reliably.
+# code is pushed to main OR dev (only when bootstrap/ or this file
+# changes), or can be triggered manually from the Actions tab. It
+# compiles bootstrap/launcher.py into one MNR_Launcher.exe, using a
+# clean full Python install (not the stripped-down portable one
+# artists use), since PyInstaller needs the full standard library to
+# build reliably.
 #
 # It also publishes a GitHub Release with that .exe attached, using
-# the run number as an auto-incrementing version. The running app
-# checks that release on every launch to see if a newer shell is
-# available, so artists never have to manually re-download a new .exe.
+# the run number as an auto-incrementing version. Builds from main are
+# tagged v<N> and become "Latest", real users' running apps check
+# that. Builds from dev are tagged dev-<N> and marked as a
+# pre-release, which means they never become "Latest" and can never
+# be picked up by a normal user, only by someone who has explicitly
+# switched on the Dev Exe toggle inside the app.
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, dev ]
     paths:
       - 'bootstrap/**'
       - '.github/workflows/build.yml'
@@ -58,10 +62,21 @@ jobs:
           name: MNR_Launcher-windows
           path: dist/MNR_Launcher.exe
 
-      - name: Publish a GitHub Release with the .exe attached
+      - name: Publish a GitHub Release (main branch, becomes Latest)
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ github.run_number }}
           name: MNR Launcher v${{ github.run_number }}
           files: dist/MNR_Launcher.exe
           generate_release_notes: false
+
+      - name: Publish a GitHub Release (dev branch, pre-release only)
+        if: github.ref == 'refs/heads/dev'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dev-${{ github.run_number }}
+          name: MNR Launcher Dev Build ${{ github.run_number }}
+          files: dist/MNR_Launcher.exe
+          generate_release_notes: false
+          prerelease: true

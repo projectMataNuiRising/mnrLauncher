@@ -119,13 +119,37 @@ def warn_and_exit_if_on_cloud_drive():
 
 GITHUB_OWNER = "projectMataNuiRising"
 GITHUB_REPO = "mnrLauncher"
-GITHUB_BRANCH = "main"
-ZIP_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/archive/refs/heads/{GITHUB_BRANCH}.zip"
 LATEST_RELEASE_API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
+ALL_RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
 
 # Special exit code main.py uses to mean "refetch and run me again"
-# (set when the user clicks the Refresh button), instead of a normal quit.
+# (set when the user clicks Refresh, or flips a dev-mode toggle),
+# instead of a normal quit.
 REFRESH_EXIT_CODE = 42
+
+
+def get_dev_settings_path(cache_dir):
+    return os.path.join(cache_dir, "dev_settings.json")
+
+
+def read_dev_settings(cache_dir):
+    """
+    Two independent toggles, set from inside the running app's Debug
+    panel: whether to pull app code from the dev branch instead of
+    main, and whether to self-update from dev shell builds instead of
+    the normal production release. Defaults to both off (production)
+    if this file doesn't exist yet, or can't be read for any reason,
+    a real user should never end up on a dev track by accident.
+    """
+    try:
+        with open(get_dev_settings_path(cache_dir), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return {
+            "dev_app_code": bool(data.get("dev_app_code", False)),
+            "dev_exe": bool(data.get("dev_exe", False)),
+        }
+    except Exception:
+        return {"dev_app_code": False, "dev_exe": False}
 
 
 def get_cache_dir():
@@ -147,12 +171,12 @@ def get_cache_dir():
     return cache_dir
 
 
-def fetch_latest_app(cache_dir, status_callback=None):
+def fetch_latest_app(cache_dir, branch="main", status_callback=None):
     """
-    Downloads the current GitHub code and replaces the cached app/
-    folder with it. Returns True if the cache was updated, False if it
-    fell back to whatever was already cached (e.g. no internet, or the
-    download/extract failed partway through).
+    Downloads the current GitHub code for the given branch and
+    replaces the cached app/ folder with it. Returns True if the cache
+    was updated, False if it fell back to whatever was already cached
+    (e.g. no internet, or the download/extract failed partway through).
     """
     def report(msg):
         if status_callback:
@@ -160,13 +184,14 @@ def fetch_latest_app(cache_dir, status_callback=None):
         else:
             print(f"[MNR] {msg}")
 
-    report(f"Checking for the latest app code from {GITHUB_OWNER}/{GITHUB_REPO}...")
+    report(f"Checking for the latest app code from {GITHUB_OWNER}/{GITHUB_REPO} ({branch})...")
 
+    zip_url = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/archive/refs/heads/{branch}.zip"
     tmp_zip = os.path.join(tempfile.gettempdir(), "mnr_launcher_latest.zip")
     tmp_extract = os.path.join(tempfile.gettempdir(), "mnr_launcher_extract")
 
     try:
-        urllib.request.urlretrieve(ZIP_URL, tmp_zip)
+        urllib.request.urlretrieve(zip_url, tmp_zip)
     except (urllib.error.URLError, OSError) as e:
         report(f"Could not reach GitHub ({e}), using the last downloaded copy.")
         return False
@@ -178,7 +203,7 @@ def fetch_latest_app(cache_dir, status_callback=None):
             zf.extractall(tmp_extract)
 
         # GitHub's branch-zip nests everything under "<repo>-<branch>/"
-        nested_root = os.path.join(tmp_extract, f"{GITHUB_REPO}-{GITHUB_BRANCH}")
+        nested_root = os.path.join(tmp_extract, f"{GITHUB_REPO}-{branch}")
         fetched_app_dir = os.path.join(nested_root, "app")
 
         if not os.path.isdir(fetched_app_dir):
@@ -238,15 +263,19 @@ def _append_boot_log(cache_dir, msg):
         pass
 
 
-def check_and_apply_shell_update(status_callback=None):
+def check_and_apply_shell_update(dev_mode=False, status_callback=None):
     """
-    Checks the latest GitHub Release for a newer compiled shell than
-    this one. If found, downloads the new .exe and arranges for it to
-    replace this running one and relaunch, once this process exits.
-    Only does anything when actually running as a compiled PyInstaller
-    build, plain `python launcher.py` for local testing never self-updates.
-    Returns True if an update was found and is being applied (caller
-    should exit right after), False otherwise.
+    Checks GitHub Releases for a newer compiled shell than this one.
+    In normal mode, checks the latest production release (tag v<N>).
+    In dev mode, checks the latest pre-release instead (tag dev-<N>),
+    which real users' apps never see or pick up, since pre-releases
+    never count as "Latest". If a newer one is found, downloads it and
+    arranges for it to replace this running exe and relaunch, once
+    this process exits. Only does anything when actually running as a
+    compiled PyInstaller build, plain `python launcher.py` for local
+    testing never self-updates. Returns True if an update was found
+    and is being applied (caller should exit right after), False
+    otherwise.
     """
     def report(msg):
         if status_callback:
@@ -258,19 +287,33 @@ def check_and_apply_shell_update(status_callback=None):
         return False
 
     try:
-        req = urllib.request.Request(
-            LATEST_RELEASE_API_URL,
-            headers={"Accept": "application/vnd.github+json"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            release = json.loads(resp.read().decode("utf-8"))
+        if dev_mode:
+            req = urllib.request.Request(
+                ALL_RELEASES_API_URL,
+                headers={"Accept": "application/vnd.github+json"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                releases = json.loads(resp.read().decode("utf-8"))
+            release = next((r for r in releases if r.get("prerelease")), None)
+            if not release:
+                report("No dev build published yet.")
+                return False
+        else:
+            req = urllib.request.Request(
+                LATEST_RELEASE_API_URL,
+                headers={"Accept": "application/vnd.github+json"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                release = json.loads(resp.read().decode("utf-8"))
     except Exception as e:
         report(f"Could not check for a shell update ({e}), skipping.")
         return False
 
-    latest_tag = (release.get("tag_name") or "").lstrip("v")
+    raw_tag = release.get("tag_name") or ""
+    latest_tag = raw_tag[4:] if raw_tag.startswith("dev-") else raw_tag.lstrip("v")
+    track_label = "dev" if dev_mode else "main"
     if not latest_tag or latest_tag == SHELL_VERSION:
-        report(f"Shell is up to date (v{SHELL_VERSION}).")
+        report(f"Shell is up to date ({track_label} v{SHELL_VERSION}).")
         return False
 
     asset_url = None
@@ -283,7 +326,7 @@ def check_and_apply_shell_update(status_callback=None):
         report(f"Newer shell v{latest_tag} found but it has no .exe attached, skipping.")
         return False
 
-    report(f"Newer shell version available (v{latest_tag}), downloading...")
+    report(f"Newer {track_label} shell version available (v{latest_tag}), downloading...")
 
     current_exe = sys.executable
     new_exe_path = current_exe + ".new"
@@ -437,13 +480,22 @@ def main():
     def log(msg):
         _append_boot_log(cache_dir, msg)
 
-    if check_and_apply_shell_update(status_callback=log):
-        return  # a newer .exe is about to take over, this process is done
-
-    os.environ["MNR_SHELL_VERSION"] = SHELL_VERSION
-
     while True:
-        fetch_latest_app(cache_dir, status_callback=log)
+        # Read fresh every loop, not just once, since a dev toggle
+        # flipped from inside the app writes here and then triggers
+        # this exact same refresh cycle to pick the new value up.
+        dev_settings = read_dev_settings(cache_dir)
+
+        if check_and_apply_shell_update(dev_mode=dev_settings["dev_exe"], status_callback=log):
+            return  # a newer .exe is about to take over, this process is done
+
+        os.environ["MNR_SHELL_VERSION"] = SHELL_VERSION
+        os.environ["MNR_DEV_APP_CODE"] = "1" if dev_settings["dev_app_code"] else "0"
+        os.environ["MNR_DEV_EXE"] = "1" if dev_settings["dev_exe"] else "0"
+
+        app_branch = "dev" if dev_settings["dev_app_code"] else "main"
+        fetch_latest_app(cache_dir, branch=app_branch, status_callback=log)
+
         try:
             run_cached_app(cache_dir)
         except SystemExit as e:
