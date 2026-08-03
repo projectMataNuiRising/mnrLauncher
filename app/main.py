@@ -27,6 +27,7 @@ import re
 import json
 import time
 import shutil
+import zipfile
 import platform
 import subprocess
 import webbrowser
@@ -502,6 +503,93 @@ class MnrApi:
             return {"ok": True}
         except Exception as e:
             return {"ok": False, "detail": str(e)}
+
+    # --------------------------------------------------------
+    # Archive / Restore tool. Plain zip, STORED (no compression), since
+    # the content here is JPEGs and raw camera files that are already
+    # compressed, further compression buys almost nothing and only
+    # costs time. Internal paths are stored relative to the folder
+    # being zipped, and restoring creates a folder named after the zip
+    # and extracts directly into it, so the structure round-trips
+    # exactly, no nested duplicate folder on the way back out.
+    # --------------------------------------------------------
+
+    def get_folder_size(self, relative_parts):
+        root = get_pcloud_root()
+        full = os.path.join(root, "01-projects", *relative_parts)
+        total = 0
+        try:
+            for dirpath, _dirnames, filenames in os.walk(full):
+                for name in filenames:
+                    try:
+                        total += os.path.getsize(os.path.join(dirpath, name))
+                    except Exception:
+                        pass
+            return {"ok": True, "bytes": total}
+        except Exception as e:
+            return {"ok": False, "detail": str(e)}
+
+    def archive_folder(self, relative_parts, delete_source=True):
+        root = get_pcloud_root()
+        folder_path = os.path.join(root, "01-projects", *relative_parts)
+
+        if not os.path.isdir(folder_path):
+            return {"ok": False, "detail": "Folder not found"}
+
+        zip_path = folder_path.rstrip("\\/") + ".zip"
+        if os.path.exists(zip_path):
+            return {"ok": False, "detail": "A zip with that name already exists here"}
+
+        try:
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as zf:
+                for dirpath, _dirnames, filenames in os.walk(folder_path):
+                    for name in filenames:
+                        file_full = os.path.join(dirpath, name)
+                        arcname = os.path.relpath(file_full, folder_path)
+                        zf.write(file_full, arcname)
+            _log(f"archive_folder: created {zip_path}")
+        except Exception as e:
+            try:
+                if os.path.exists(zip_path):
+                    os.remove(zip_path)
+            except Exception:
+                pass
+            return {"ok": False, "detail": f"Zip creation failed: {e}"}
+
+        if delete_source:
+            try:
+                shutil.rmtree(folder_path)
+            except Exception as e:
+                return {"ok": True, "detail": f"Zipped, but could not delete the original folder: {e}"}
+
+        return {"ok": True, "detail": os.path.basename(zip_path)}
+
+    def dearchive_zip(self, relative_parts, delete_archive=True):
+        root = get_pcloud_root()
+        zip_path = os.path.join(root, "01-projects", *relative_parts)
+
+        if not os.path.isfile(zip_path) or not zip_path.lower().endswith(".zip"):
+            return {"ok": False, "detail": "Not a zip file"}
+
+        dest_folder = zip_path[:-4]  # strip ".zip", same name as the original folder
+        if os.path.exists(dest_folder):
+            return {"ok": False, "detail": "A folder with that name already exists here"}
+
+        try:
+            os.makedirs(dest_folder, exist_ok=True)
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(dest_folder)
+            _log(f"dearchive_zip: extracted to {dest_folder}")
+        except Exception as e:
+            return {"ok": False, "detail": f"Extraction failed: {e}"}
+
+        if delete_archive:
+            try:
+                os.remove(zip_path)
+            except Exception as e:
+                return {"ok": True, "detail": f"Extracted, but could not delete the zip: {e}"}
+
+        return {"ok": True, "detail": os.path.basename(dest_folder)}
 
     # --------------------------------------------------------
     # Refresh: when this app was launched by the installed bootstrap

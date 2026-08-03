@@ -691,6 +691,27 @@ body {
   padding-left: 6px;
 }
 
+.tree-size {
+  color: var(--muted);
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+.tree-action-button {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+
+.tree-action-button:hover { background: var(--accent-soft); }
+
 /* ---------------- Export / Work toggle sections ---------------- */
 
 .section-toggle-group {

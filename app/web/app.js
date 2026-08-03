@@ -10,6 +10,7 @@ const screens = {
   home: document.getElementById("home-screen"),
   placeholder: document.getElementById("placeholder-screen"),
   smanim: document.getElementById("smanim-screen"),
+  archive: document.getElementById("archive-screen"),
 };
 
 const topbar = document.getElementById("topbar");
@@ -328,6 +329,9 @@ document.querySelectorAll(".tile").forEach(tile => {
         hideBlenderNotice();
         showToast(`Could not launch Blender: ${result.detail}`, 5000);
       }
+    } else if (tool === "archive") {
+      showScreen("archive");
+      initArchiveScreen();
     }
   });
 });
@@ -1528,3 +1532,306 @@ function addUploadLine(text, kind) {
   line.className = kind === "ok" ? "boot-line-ok" : kind === "fail" ? "boot-line-fail" : "boot-line-info";
   uploadStatus.appendChild(line);
 }
+
+// ---------------------------------------------------------------
+// Archive / Restore tool. Browse the same project tree, click
+// "Archive" next to an eligible folder or "Restore" next to a .zip
+// to queue it up, nothing happens until Run is pressed. Kept
+// deliberately separate from the smAnim tree builder above rather
+// than generalizing it, since the two need genuinely different
+// behavior (no task filtering, no pending-upload previews here, but
+// action buttons and live folder sizes instead), and this keeps
+// either one safe to change without risking breaking the other.
+// ---------------------------------------------------------------
+
+const archiveBack = document.getElementById("archive-back");
+const archiveLeft = document.getElementById("archive-left");
+const archiveDivider = document.getElementById("archive-divider");
+const archiveRight = document.getElementById("archive-right");
+const archiveTreeRoot = document.getElementById("archive-tree-root");
+const archiveProjectFilter = document.getElementById("archive-project-filter");
+const archiveQueueList = document.getElementById("archive-queue-list");
+const restoreQueueList = document.getElementById("restore-queue-list");
+const archiveDeleteSource = document.getElementById("archive-delete-source");
+const archiveDeleteZip = document.getElementById("archive-delete-zip");
+const archiveRunButton = document.getElementById("archive-run-button");
+const archiveStatus = document.getElementById("archive-status");
+
+let archiveQueue = []; // [{pathParts, name}]
+let restoreQueue = [];
+let archiveTreeGeneration = 0;
+
+archiveBack.addEventListener("click", () => {
+  showScreen("home");
+});
+
+// Same resizable-divider behavior as the smAnim screen.
+(function setupArchiveDivider() {
+  let dragging = false;
+  archiveDivider.addEventListener("mousedown", () => {
+    dragging = true;
+    archiveDivider.classList.add("dragging");
+    document.body.style.userSelect = "none";
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const rect = archiveLeft.parentElement.getBoundingClientRect();
+    let leftPercent = ((e.clientX - rect.left) / rect.width) * 100;
+    leftPercent = Math.max(25, Math.min(80, leftPercent));
+    archiveLeft.style.flex = `0 0 ${leftPercent}%`;
+    archiveRight.style.flex = `1 1 ${100 - leftPercent}%`;
+  });
+  document.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    archiveDivider.classList.remove("dragging");
+    document.body.style.userSelect = "";
+  });
+})();
+
+async function initArchiveScreen() {
+  archiveQueue = [];
+  restoreQueue = [];
+  archiveStatus.innerHTML = "";
+  renderArchiveQueues();
+
+  const result = await window.pywebview.api.list_projects();
+  archiveProjectFilter.innerHTML = "";
+  const allOpt = document.createElement("option");
+  allOpt.value = "";
+  allOpt.textContent = "All Projects";
+  archiveProjectFilter.appendChild(allOpt);
+  if (result.ok) {
+    result.items.forEach(name => {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      archiveProjectFilter.appendChild(opt);
+    });
+  }
+
+  await refreshArchiveTree();
+}
+
+archiveProjectFilter.addEventListener("change", refreshArchiveTree);
+
+async function refreshArchiveTree() {
+  const myGeneration = ++archiveTreeGeneration;
+  archiveTreeRoot.innerHTML = "";
+  const rootParts = archiveProjectFilter.value ? [archiveProjectFilter.value] : [];
+  await buildArchiveLevel(archiveTreeRoot, rootParts, myGeneration);
+}
+
+// A folder can be archived only if it sits strictly inside a
+// .../export/publish/media/... folder, not the media folder itself,
+// matching "these specific folders can be archived, not everything".
+function isArchivablePath(pathParts) {
+  for (let i = 0; i + 2 < pathParts.length; i++) {
+    if (pathParts[i] === "export" && pathParts[i + 1] === "publish" && pathParts[i + 2] === "media") {
+      return pathParts.length > i + 3;
+    }
+  }
+  return false;
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unitIndex = -1;
+  do {
+    value /= 1024;
+    unitIndex++;
+  } while (value >= 1024 && unitIndex < units.length - 1);
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+async function buildArchiveLevel(container, pathParts, generation) {
+  const result = await window.pywebview.api.list_dir_entries(pathParts, false);
+  if (generation !== archiveTreeGeneration) return;
+
+  if (!result.ok) {
+    const msg = document.createElement("div");
+    msg.className = "tree-name tree-missing";
+    msg.textContent = pathParts.length === 0 ? "(could not read 01-projects)" : "(empty)";
+    container.appendChild(msg);
+    return;
+  }
+
+  for (const item of result.items) {
+    const nextParts = pathParts.concat(item.name);
+    const depth = pathParts.length;
+    const { row, toggle, label } = makeRow(item.name, item.is_dir, depth);
+    container.appendChild(row);
+
+    const isZip = !item.is_dir && item.name.toLowerCase().endsWith(".zip");
+    const isArchivableFolder = item.is_dir && isArchivablePath(nextParts);
+
+    if (item.is_dir) {
+      const sizeSpan = document.createElement("span");
+      sizeSpan.className = "tree-size";
+      sizeSpan.textContent = "";
+      row.appendChild(sizeSpan);
+      window.pywebview.api.get_folder_size(nextParts).then(sizeResult => {
+        if (sizeResult.ok) sizeSpan.textContent = `(${formatBytes(sizeResult.bytes)})`;
+      });
+    }
+
+    if (isArchivableFolder) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "tree-action-button";
+      btn.textContent = "Archive";
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        addToArchiveQueue(nextParts, item.name);
+      });
+      row.appendChild(btn);
+    } else if (isZip) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "tree-action-button";
+      btn.textContent = "Restore";
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        addToRestoreQueue(nextParts, item.name);
+      });
+      row.appendChild(btn);
+    }
+
+    let childrenContainer = null;
+    let expanded = false;
+
+    async function doExpand() {
+      if (!childrenContainer) {
+        childrenContainer = document.createElement("div");
+        childrenContainer.className = "tree-children";
+        row.insertAdjacentElement("afterend", childrenContainer);
+      }
+      expanded = !expanded;
+      toggle.textContent = expanded ? "\u25bc" : "\u25b6";
+      childrenContainer.style.display = expanded ? "block" : "none";
+      if (expanded && childrenContainer.childElementCount === 0) {
+        await buildArchiveLevel(childrenContainer, nextParts, generation);
+      }
+    }
+
+    if (item.is_dir) {
+      row.addEventListener("click", () => doExpand());
+    } else {
+      row.addEventListener("dblclick", async () => {
+        const res = await window.pywebview.api.open_path(nextParts);
+        if (!res.ok) console.error("open_path failed", res.detail);
+      });
+    }
+  }
+}
+
+function addToArchiveQueue(pathParts, name) {
+  if (archiveQueue.some(q => q.pathParts.join("/") === pathParts.join("/"))) return;
+  archiveQueue.push({ pathParts, name });
+  renderArchiveQueues();
+}
+
+function addToRestoreQueue(pathParts, name) {
+  if (restoreQueue.some(q => q.pathParts.join("/") === pathParts.join("/"))) return;
+  restoreQueue.push({ pathParts, name });
+  renderArchiveQueues();
+}
+
+function renderArchiveQueues() {
+  archiveQueueList.innerHTML = "";
+  if (archiveQueue.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "file-list-empty";
+    empty.textContent = "Nothing queued.";
+    archiveQueueList.appendChild(empty);
+  } else {
+    archiveQueue.forEach((entry, i) => {
+      const row = document.createElement("div");
+      row.className = "file-item";
+      const name = document.createElement("span");
+      name.className = "file-item-name";
+      name.textContent = entry.name;
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "file-item-remove";
+      removeBtn.textContent = "\u00d7";
+      removeBtn.addEventListener("click", () => {
+        archiveQueue.splice(i, 1);
+        renderArchiveQueues();
+      });
+      row.appendChild(name);
+      row.appendChild(removeBtn);
+      archiveQueueList.appendChild(row);
+    });
+  }
+
+  restoreQueueList.innerHTML = "";
+  if (restoreQueue.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "file-list-empty";
+    empty.textContent = "Nothing queued.";
+    restoreQueueList.appendChild(empty);
+  } else {
+    restoreQueue.forEach((entry, i) => {
+      const row = document.createElement("div");
+      row.className = "file-item";
+      const name = document.createElement("span");
+      name.className = "file-item-name";
+      name.textContent = entry.name;
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "file-item-remove";
+      removeBtn.textContent = "\u00d7";
+      removeBtn.addEventListener("click", () => {
+        restoreQueue.splice(i, 1);
+        renderArchiveQueues();
+      });
+      row.appendChild(name);
+      row.appendChild(removeBtn);
+      restoreQueueList.appendChild(row);
+    });
+  }
+
+  const ready = archiveQueue.length > 0 || restoreQueue.length > 0;
+  archiveRunButton.disabled = !ready;
+  archiveRunButton.classList.toggle("ready", ready);
+}
+
+function addArchiveStatusLine(text, kind) {
+  const line = document.createElement("div");
+  line.textContent = text;
+  line.className = kind === "ok" ? "boot-line-ok" : kind === "fail" ? "boot-line-fail" : "boot-line-info";
+  archiveStatus.appendChild(line);
+}
+
+archiveRunButton.addEventListener("click", async () => {
+  archiveRunButton.disabled = true;
+  archiveStatus.innerHTML = "";
+  const deleteSource = archiveDeleteSource.checked;
+  const deleteZip = archiveDeleteZip.checked;
+
+  for (const entry of archiveQueue) {
+    addArchiveStatusLine(`Archiving ${entry.name}...`, "info");
+    const result = await window.pywebview.api.archive_folder(entry.pathParts, deleteSource);
+    addArchiveStatusLine(
+      result.ok ? `[OK] ${entry.name} \u2192 ${result.detail}` : `[FAIL] ${entry.name}: ${result.detail}`,
+      result.ok ? "ok" : "fail"
+    );
+  }
+
+  for (const entry of restoreQueue) {
+    addArchiveStatusLine(`Restoring ${entry.name}...`, "info");
+    const result = await window.pywebview.api.dearchive_zip(entry.pathParts, deleteZip);
+    addArchiveStatusLine(
+      result.ok ? `[OK] ${entry.name} \u2192 ${result.detail}` : `[FAIL] ${entry.name}: ${result.detail}`,
+      result.ok ? "ok" : "fail"
+    );
+  }
+
+  archiveQueue = [];
+  restoreQueue = [];
+  renderArchiveQueues();
+  await refreshArchiveTree();
+});
