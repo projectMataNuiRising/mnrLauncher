@@ -521,6 +521,40 @@ class MnrApi:
             pass
         return {"ok": True}
 
+    def get_pending_shell_update(self):
+        """
+        The installed shell checks for an update before this app even
+        opens and, if one exists, injects it here rather than
+        downloading it automatically. The UI shows a forced "Update
+        Now" gate if this comes back available, nothing else in the
+        app is usable until it's handled, on purpose, so nobody ends
+        up running a stale, mismatched version without realizing it.
+        """
+        info = globals().get("_mnr_pending_shell_update")
+        return {"available": bool(info), "info": info}
+
+    def apply_shell_update(self):
+        """
+        Only ever called from the forced update gate's button click,
+        never automatically. Downloads the new exe and hands off to
+        the swap-and-relaunch relay, this process exits right after.
+        """
+        callback = globals().get("_mnr_apply_shell_update_callback")
+        if not callback:
+            return {"ok": False, "detail": "No update available to apply"}
+
+        success = callback()
+        if not success:
+            return {"ok": False, "detail": "Download failed, check your internet connection and try again"}
+
+        _log("Shell update applied by user, restarting...")
+        _SHELL_UPDATE_STATE["requested"] = True
+        try:
+            webview.windows[0].destroy()
+        except Exception:
+            pass
+        return {"ok": True}
+
     def get_debug_log(self):
         return {"lines": list(_DEBUG_LOG)}
 
@@ -737,6 +771,7 @@ class MnrApi:
 # ------------------------------------------------------------
 
 _REFRESH_STATE = {"requested": False}
+_SHELL_UPDATE_STATE = {"requested": False}
 
 def _resolve_index_html():
     here = os.path.dirname(os.path.abspath(__file__))
@@ -772,6 +807,13 @@ def main():
         min_size=(900, 600),
     )
     webview.start()
+
+    # If a shell update was applied, exit with the code the bootstrap
+    # shell recognizes as "the relay is taking over, exit for good"
+    # rather than looping back to keep running. Checked first since
+    # it takes priority over a normal refresh.
+    if _SHELL_UPDATE_STATE["requested"]:
+        sys.exit(44)
 
     # If the Refresh button was used, exit with a code the bootstrap
     # shell recognizes as "fetch the latest code and run me again"

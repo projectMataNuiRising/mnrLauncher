@@ -82,6 +82,18 @@
     <button id="blender-notice-close" class="icon-only-button" title="Dismiss">×</button>
   </div>
 
+  <!-- Forced update gate. Covers everything, nothing else in the app
+       is reachable until this is resolved. Shown instead of the boot
+       screen when the shell finds a newer version. -->
+  <div id="shell-update-gate" class="shell-update-gate hidden">
+    <div class="shell-update-box">
+      <div class="shell-update-title">Update Available</div>
+      <div id="shell-update-sub" class="shell-update-sub">A newer version of MNR Launcher is ready.</div>
+      <button id="shell-update-button" class="upload-button ready">Update Now</button>
+      <div id="shell-update-status" class="next-note"></div>
+    </div>
+  </div>
+
   <!-- Boot screen -->
   <div id="boot-screen" class="screen">
     <div class="boot-box">

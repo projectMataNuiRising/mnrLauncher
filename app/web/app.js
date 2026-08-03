@@ -23,6 +23,31 @@ const userList = document.getElementById("user-list");
 const placeholderText = document.getElementById("placeholder-text");
 const placeholderBack = document.getElementById("placeholder-back");
 const onboardingLink = document.getElementById("onboarding-link");
+const shellUpdateGate = document.getElementById("shell-update-gate");
+const shellUpdateSub = document.getElementById("shell-update-sub");
+const shellUpdateButton = document.getElementById("shell-update-button");
+const shellUpdateStatus = document.getElementById("shell-update-status");
+
+function showShellUpdateGate(info) {
+  if (info && info.version) {
+    shellUpdateSub.textContent = `Version ${info.version} is ready. Update now to continue.`;
+  }
+  shellUpdateGate.classList.remove("hidden");
+}
+
+shellUpdateButton.addEventListener("click", async () => {
+  shellUpdateButton.disabled = true;
+  shellUpdateButton.textContent = "Downloading...";
+  shellUpdateStatus.textContent = "This may take a moment depending on your connection.";
+
+  const result = await window.pywebview.api.apply_shell_update();
+  if (!result.ok) {
+    shellUpdateButton.disabled = false;
+    shellUpdateButton.textContent = "Update Now";
+    shellUpdateStatus.textContent = `${result.detail}. Try again.`;
+  }
+  // On success the window closes itself shortly, nothing else to do here.
+});
 const versionBadge = document.getElementById("version-badge");
 const toastEl = document.getElementById("toast");
 const blenderTile = document.getElementById("blender-tile");
@@ -189,6 +214,12 @@ async function pollTransferActivity() {
 }
 
 async function runBoot() {
+  const pendingUpdate = await window.pywebview.api.get_pending_shell_update();
+  if (pendingUpdate.available) {
+    showShellUpdateGate(pendingUpdate.info);
+    return; // nothing else runs until this is resolved
+  }
+
   onboardingLink.href = ONBOARDING_URL;
 
   window.pywebview.api.get_app_info().then(info => {

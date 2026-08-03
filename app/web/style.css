@@ -308,6 +308,41 @@ body {
 
 /* Boot screen */
 
+.shell-update-gate {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 9, 11, 0.94);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.shell-update-gate.hidden { display: none; }
+
+.shell-update-box {
+  width: 360px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 32px;
+  text-align: center;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+}
+
+.shell-update-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.shell-update-sub {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 22px;
+}
+
 .boot-box {
   width: 460px;
   background: var(--panel);

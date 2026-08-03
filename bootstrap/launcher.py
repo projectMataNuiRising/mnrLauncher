@@ -127,6 +127,12 @@ ALL_RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REP
 # instead of a normal quit.
 REFRESH_EXIT_CODE = 42
 
+# Used when the user clicks "Update Now" on the forced update gate:
+# means "a shell update was applied, exit for good, the relay is
+# taking over", as opposed to REFRESH_EXIT_CODE which just means
+# "refetch app code and keep running".
+SHELL_UPDATE_EXIT_CODE = 44
+
 
 def get_dev_settings_path(cache_dir):
     return os.path.join(cache_dir, "dev_settings.json")
@@ -233,13 +239,20 @@ def fetch_latest_app(cache_dir, branch="main", status_callback=None):
                 pass
 
 
-def run_cached_app(cache_dir):
+def run_cached_app(cache_dir, update_info=None):
     """
     Runs the cached app/main.py exactly as if it had been launched
     directly, so its "if __name__ == '__main__':" guard fires normally.
     It still imports pywebview/psutil from THIS already-running process,
     those are bundled in by PyInstaller, only the app logic itself came
     fresh from GitHub.
+
+    update_info (a dict with version/asset_url, or None) and a
+    matching apply-callback are injected directly into main.py's
+    global namespace before it runs, so its UI can show a forced
+    "Update Now" gate and, once clicked, trigger the actual download
+    and swap without main.py needing to know anything about how that
+    works under the hood.
     """
     main_py = os.path.join(cache_dir, "app", "main.py")
     if not os.path.isfile(main_py):
@@ -248,7 +261,14 @@ def run_cached_app(cache_dir):
         input("Press Enter to close...")
         sys.exit(1)
 
-    runpy.run_path(main_py, run_name="__main__")
+    def apply_update_callback():
+        return _do_apply_shell_update(update_info, status_callback=lambda m: _append_boot_log(cache_dir, m))
+
+    injected_globals = {
+        "_mnr_pending_shell_update": update_info,
+        "_mnr_apply_shell_update_callback": apply_update_callback,
+    }
+    runpy.run_path(main_py, run_name="__main__", init_globals=injected_globals)
 
 
 def get_boot_log_path(cache_dir):
@@ -263,19 +283,19 @@ def _append_boot_log(cache_dir, msg):
         pass
 
 
-def check_and_apply_shell_update(dev_mode=False, status_callback=None):
+def check_for_shell_update(dev_mode=False, status_callback=None):
     """
     Checks GitHub Releases for a newer compiled shell than this one.
     In normal mode, checks the latest production release (tag v<N>).
     In dev mode, checks the latest pre-release instead (tag dev-<N>),
     which real users' apps never see or pick up, since pre-releases
-    never count as "Latest". If a newer one is found, downloads it and
-    arranges for it to replace this running exe and relaunch, once
-    this process exits. Only does anything when actually running as a
-    compiled PyInstaller build, plain `python launcher.py` for local
-    testing never self-updates. Returns True if an update was found
-    and is being applied (caller should exit right after), False
-    otherwise.
+    never count as "Latest". Only checks, never downloads anything,
+    that only happens once the user explicitly clicks "Update Now" on
+    the forced gate in the app itself. Only does anything when
+    actually running as a compiled PyInstaller build, plain
+    `python launcher.py` for local testing never sees updates. Returns
+    a dict with version/asset_url/track if an update is available, or
+    None otherwise.
     """
     def report(msg):
         if status_callback:
@@ -284,7 +304,7 @@ def check_and_apply_shell_update(dev_mode=False, status_callback=None):
             print(f"[MNR] {msg}")
 
     if not getattr(sys, "frozen", False):
-        return False
+        return None
 
     try:
         if dev_mode:
@@ -297,7 +317,7 @@ def check_and_apply_shell_update(dev_mode=False, status_callback=None):
             release = next((r for r in releases if r.get("prerelease")), None)
             if not release:
                 report("No dev build published yet.")
-                return False
+                return None
         else:
             req = urllib.request.Request(
                 LATEST_RELEASE_API_URL,
@@ -307,14 +327,14 @@ def check_and_apply_shell_update(dev_mode=False, status_callback=None):
                 release = json.loads(resp.read().decode("utf-8"))
     except Exception as e:
         report(f"Could not check for a shell update ({e}), skipping.")
-        return False
+        return None
 
     raw_tag = release.get("tag_name") or ""
     latest_tag = raw_tag[4:] if raw_tag.startswith("dev-") else raw_tag.lstrip("v")
     track_label = "dev" if dev_mode else "main"
     if not latest_tag or latest_tag == SHELL_VERSION:
         report(f"Shell is up to date ({track_label} v{SHELL_VERSION}).")
-        return False
+        return None
 
     asset_url = None
     for asset in release.get("assets", []):
@@ -323,66 +343,43 @@ def check_and_apply_shell_update(dev_mode=False, status_callback=None):
             break
 
     if not asset_url:
-        report(f"Newer shell v{latest_tag} found but it has no .exe attached, skipping.")
-        return False
+        report(f"Newer {track_label} shell v{latest_tag} found but it has no .exe attached, skipping.")
+        return None
 
-    report(f"Newer {track_label} shell version available (v{latest_tag}), downloading...")
+    report(f"Newer {track_label} shell version available (v{latest_tag}).")
+    return {"version": latest_tag, "asset_url": asset_url, "track": track_label}
+
+
+def _do_apply_shell_update(update_info, status_callback=None):
+    """
+    The actual download-and-swap, only ever called from the injected
+    callback main.py's "Update Now" button triggers, never
+    automatically. No visible window of its own needed anymore, the
+    app's own UI (the forced gate) shows the in-progress state now.
+    """
+    def report(msg):
+        if status_callback:
+            status_callback(msg)
+        else:
+            print(f"[MNR] {msg}")
+
+    if not update_info:
+        return False
 
     current_exe = sys.executable
     new_exe_path = current_exe + ".new"
 
-    # From here on this happens inside a small visible window instead of
-    # completely invisibly. Two reasons: so a user isn't left wondering
-    # why the app is slow to open with nothing on screen, and because a
-    # silent process that downloads a new exe and replaces itself with
-    # zero visible window is exactly the shape of behavior antivirus
-    # heuristics flag as suspicious. This still requires no click or
-    # action from the user, it just shows what is happening instead of
-    # hiding it.
-    update_result = {"applied": False}
+    try:
+        urllib.request.urlretrieve(update_info["asset_url"], new_exe_path)
+    except Exception as e:
+        report(f"Shell update download failed ({e}).")
+        return False
 
-    def do_update(window):
-        try:
-            urllib.request.urlretrieve(asset_url, new_exe_path)
-        except Exception as e:
-            report(f"Shell update download failed ({e}), continuing with current version.")
-            window.destroy()
-            return
+    report("Update downloaded, restarting...")
+    _refresh_windows_icon_cache()
+    _spawn_update_relay(current_exe, new_exe_path)
+    return True
 
-        report("Update downloaded, restarting...")
-        _refresh_windows_icon_cache()
-        _spawn_update_relay(current_exe, new_exe_path)
-        update_result["applied"] = True
-        window.destroy()
-
-    window = webview.create_window(
-        "MNR Launcher",
-        html=_UPDATE_WINDOW_HTML,
-        width=380,
-        height=160,
-        resizable=False,
-    )
-    webview.start(do_update, (window,))
-
-    return update_result["applied"]
-
-
-_UPDATE_WINDOW_HTML = """
-<html>
-<body style="margin:0; height:100vh; display:flex; align-items:center;
-             justify-content:center; background:#1a1b1e; color:#e7e8ea;
-             font-family: -apple-system, 'Segoe UI', Arial, sans-serif;">
-  <div style="text-align:center;">
-    <div style="font-size:16px; font-weight:600; margin-bottom:8px;">
-      Updating MNR Launcher...
-    </div>
-    <div style="font-size:12px; color:#8b8d93;">
-      This will just take a moment.
-    </div>
-  </div>
-</body>
-</html>
-"""
 
 
 def _refresh_windows_icon_cache():
@@ -486,8 +483,10 @@ def main():
         # this exact same refresh cycle to pick the new value up.
         dev_settings = read_dev_settings(cache_dir)
 
-        if check_and_apply_shell_update(dev_mode=dev_settings["dev_exe"], status_callback=log):
-            return  # a newer .exe is about to take over, this process is done
+        # Only checks, never downloads. main.py's own UI shows a forced
+        # "Update Now" gate if this is non-None, the actual download
+        # only happens once that button is clicked.
+        update_info = check_for_shell_update(dev_mode=dev_settings["dev_exe"], status_callback=log)
 
         os.environ["MNR_SHELL_VERSION"] = SHELL_VERSION
         os.environ["MNR_DEV_APP_CODE"] = "1" if dev_settings["dev_app_code"] else "0"
@@ -497,11 +496,14 @@ def main():
         fetch_latest_app(cache_dir, branch=app_branch, status_callback=log)
 
         try:
-            run_cached_app(cache_dir)
+            run_cached_app(cache_dir, update_info=update_info)
         except SystemExit as e:
             if e.code == REFRESH_EXIT_CODE:
                 log("Refresh requested, fetching again...")
                 continue
+            if e.code == SHELL_UPDATE_EXIT_CODE:
+                log("Shell update applied, handing off to the new version...")
+                return
             raise
         break
 
