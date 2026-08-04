@@ -259,6 +259,37 @@ def _extract_blender_version(blender_version_dir):
     return match.group(1) if match else "?"
 
 
+def _resolve_rawtherapee_paths():
+    root = get_pcloud_root()
+    rt_root = os.path.join(root, "02-pipeline", "apps", "rawTherapee", "01-latest")
+
+    pipeline_build_dir = _find_first_subfolder(rt_root)
+    if not pipeline_build_dir:
+        return None
+
+    rt_version_dir = _find_first_subfolder(pipeline_build_dir)
+    if not rt_version_dir:
+        return None
+
+    exe_path = os.path.join(rt_version_dir, "RawTherapee.exe")
+    if not os.path.isfile(exe_path):
+        return None
+
+    return {
+        "pipeline_build_dir": pipeline_build_dir,
+        "rt_version_dir": rt_version_dir,
+        "exe_path": exe_path,
+    }
+
+
+_RT_VERSION_RE = re.compile(r"rawtherapee-([\d.]+)", re.IGNORECASE)
+
+
+def _extract_rawtherapee_version(rt_version_dir):
+    match = _RT_VERSION_RE.search(os.path.basename(rt_version_dir))
+    return match.group(1) if match else "?"
+
+
 # ------------------------------------------------------------
 # pCloud process heuristic (best-effort, there is no official API)
 # ------------------------------------------------------------
@@ -974,6 +1005,70 @@ class MnrApi:
             return {"ok": True}
         except Exception as e:
             _log(f"launch_blender failed: {e}")
+            return {"ok": False, "detail": str(e)}
+
+    # --------------------------------------------------------
+    # RawTherapee launch. Windows only for now. Same live-scan pattern
+    # as Blender, no install step, since a genuinely portable build
+    # works exactly like Blender's portable one. RT_SETTINGS/RT_CACHE
+    # redirect config and cache to a writable per-user folder, since
+    # the shared copy on pCloud is read-only. Deliberately does NOT
+    # touch the "MultiUser" option some guides mention, a real bug
+    # report found that setting can conflict with these two
+    # environment variables.
+    # --------------------------------------------------------
+
+    def get_rawtherapee_info(self):
+        if platform.system() != "Windows":
+            return {"ok": False, "supported": False, "detail": "Windows only for now"}
+
+        paths = _resolve_rawtherapee_paths()
+        if not paths:
+            return {"ok": False, "supported": True, "detail": "No RawTherapee build found in the pipeline folder"}
+
+        version = _extract_rawtherapee_version(paths["rt_version_dir"])
+        return {"ok": True, "supported": True, "version": version}
+
+    def is_rawtherapee_running(self):
+        if not HAS_PSUTIL:
+            return {"ok": False, "detail": "psutil not available"}
+        try:
+            for proc in psutil.process_iter(["name"]):
+                name = (proc.info.get("name") or "").lower()
+                if name == "rawtherapee.exe":
+                    return {"ok": True, "running": True}
+            return {"ok": True, "running": False}
+        except Exception as e:
+            return {"ok": False, "detail": str(e)}
+
+    def launch_rawtherapee(self):
+        if platform.system() != "Windows":
+            return {"ok": False, "detail": "Windows only for now"}
+
+        paths = _resolve_rawtherapee_paths()
+        if not paths:
+            return {"ok": False, "detail": "Could not find a RawTherapee build in the pipeline folder"}
+
+        try:
+            appdata = os.environ.get("APPDATA", os.path.expanduser("~"))
+            settings_dir = os.path.join(appdata, "RawTherapee", "config")
+            cache_dir = os.path.join(appdata, "RawTherapee", "cache")
+            os.makedirs(settings_dir, exist_ok=True)
+            os.makedirs(cache_dir, exist_ok=True)
+
+            env = os.environ.copy()
+            env["RT_SETTINGS"] = settings_dir
+            env["RT_CACHE"] = cache_dir
+
+            _log(f"launch_rawtherapee: {paths['exe_path']}")
+            subprocess.Popen(
+                [paths["exe_path"]],
+                env=env,
+                cwd=paths["rt_version_dir"],
+            )
+            return {"ok": True}
+        except Exception as e:
+            _log(f"launch_rawtherapee failed: {e}")
             return {"ok": False, "detail": str(e)}
 
     # --------------------------------------------------------

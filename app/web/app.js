@@ -107,6 +107,54 @@ async function refreshBlenderTile() {
   }
 }
 
+const rawtherapeeTile = document.getElementById("rawtherapee-tile");
+const rawtherapeeTileBadge = document.getElementById("rawtherapee-tile-badge");
+const rawtherapeeNotice = document.getElementById("rawtherapee-notice");
+const rawtherapeeNoticeClose = document.getElementById("rawtherapee-notice-close");
+let rawtherapeePollInterval = null;
+
+function showRawtherapeeNotice() {
+  rawtherapeeNotice.classList.remove("hidden");
+  clearInterval(rawtherapeePollInterval);
+  rawtherapeePollInterval = setInterval(async () => {
+    try {
+      const result = await window.pywebview.api.is_rawtherapee_running();
+      if (result.ok && result.running) {
+        hideRawtherapeeNotice();
+      }
+    } catch (e) {
+      // Keep waiting quietly, do not spam errors while polling.
+    }
+  }, 4000);
+}
+
+function hideRawtherapeeNotice() {
+  rawtherapeeNotice.classList.add("hidden");
+  clearInterval(rawtherapeePollInterval);
+  rawtherapeePollInterval = null;
+}
+
+rawtherapeeNoticeClose.addEventListener("click", hideRawtherapeeNotice);
+
+async function refreshRawtherapeeTile() {
+  try {
+    const info = await window.pywebview.api.get_rawtherapee_info();
+    if (!info.supported) {
+      rawtherapeeTileBadge.textContent = "Windows only";
+      rawtherapeeTile.classList.add("tile-disabled");
+    } else if (info.ok) {
+      rawtherapeeTileBadge.textContent = `v${info.version}`;
+      rawtherapeeTile.classList.remove("tile-disabled");
+    } else {
+      rawtherapeeTileBadge.textContent = "Not found";
+      rawtherapeeTile.classList.add("tile-disabled");
+    }
+  } catch (e) {
+    rawtherapeeTileBadge.textContent = "Not found";
+    rawtherapeeTile.classList.add("tile-disabled");
+  }
+}
+
 const ddProject = document.getElementById("dd-project");
 const ddEpisode = document.getElementById("dd-episode");
 const ddSequence = document.getElementById("dd-sequence");
@@ -264,6 +312,7 @@ async function runBoot() {
   pollTransferActivity();
   setInterval(pollTransferActivity, 20000);
   refreshBlenderTile();
+  refreshRawtherapeeTile();
 
   const savedUser = await window.pywebview.api.get_saved_user();
   if (savedUser && allUsers.includes(savedUser)) {
@@ -328,6 +377,13 @@ document.querySelectorAll(".tile").forEach(tile => {
       if (!result.ok) {
         hideBlenderNotice();
         showToast(`Could not launch Blender: ${result.detail}`, 5000);
+      }
+    } else if (tool === "rawtherapee") {
+      showRawtherapeeNotice();
+      const result = await window.pywebview.api.launch_rawtherapee();
+      if (!result.ok) {
+        hideRawtherapeeNotice();
+        showToast(`Could not launch RawTherapee: ${result.detail}`, 5000);
       }
     } else if (tool === "archive") {
       showScreen("archive");

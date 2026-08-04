@@ -82,6 +82,17 @@
     <button id="blender-notice-close" class="icon-only-button" title="Dismiss">×</button>
   </div>
 
+  <!-- Same idea for RawTherapee, a much smaller download than Blender
+       but still worth the same reassurance on a first launch -->
+  <div id="rawtherapee-notice" class="blender-notice hidden">
+    <div class="blender-notice-spinner"></div>
+    <div class="blender-notice-text">
+      <div class="blender-notice-title">Starting RawTherapee...</div>
+      <div class="blender-notice-sub">pCloud may need to fetch the build the first time, this is usually quick.</div>
+    </div>
+    <button id="rawtherapee-notice-close" class="icon-only-button" title="Dismiss">×</button>
+  </div>
+
   <!-- Forced update gate. Covers everything, nothing else in the app
        is reachable until this is resolved. Shown instead of the boot
        screen when the shell finds a newer version. -->
@@ -153,6 +164,13 @@
           </span>
           <span class="tile-label">Blender</span>
           <span id="blender-tile-badge" class="tile-badge">Checking...</span>
+        </button>
+        <button class="tile" id="rawtherapee-tile" data-tool="rawtherapee">
+          <span class="tile-icon">
+            <img src="https://icons.duckduckgo.com/ip3/rawtherapee.com.ico" alt="RawTherapee">
+          </span>
+          <span class="tile-label">RawTherapee</span>
+          <span id="rawtherapee-tile-badge" class="tile-badge">Checking...</span>
         </button>
         <button class="tile" data-tool="external" data-url="https://kitsu.projectmatanuirising.com/">
           <span class="tile-icon">
