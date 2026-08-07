@@ -1056,6 +1056,24 @@ class MnrApi:
             os.makedirs(settings_dir, exist_ok=True)
             os.makedirs(cache_dir, exist_ok=True)
 
+            # Copy the shared, pipeline-controlled defaults (options file,
+            # default processing profile, ACEScg output ICC, etc) into this
+            # artist's own writable config folder before every launch. This
+            # is a merge, not a wipe, files that exist in both places get
+            # refreshed from the master copy, but anything the artist has
+            # added on their own that isn't part of the shared set is left
+            # alone. The master itself lives outside artists' normal
+            # working area on purpose, protected by being out of the way
+            # rather than by file permissions, since RawTherapee needs to
+            # be able to write to its own config folder to function at all.
+            root = get_pcloud_root()
+            master_config_dir = os.path.join(root, "02-pipeline", "colorManagement", "rawTherapeeDefaults")
+            if os.path.isdir(master_config_dir):
+                try:
+                    shutil.copytree(master_config_dir, settings_dir, dirs_exist_ok=True)
+                except Exception as e:
+                    _log(f"launch_rawtherapee: config sync from {master_config_dir} failed: {e}")
+
             env = os.environ.copy()
             env["RT_SETTINGS"] = settings_dir
             env["RT_CACHE"] = cache_dir
