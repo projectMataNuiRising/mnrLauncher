@@ -1079,6 +1079,7 @@ class MnrApi:
 
         return {
             "ok": True,
+            "prefix": seq["prefix"],
             "frame_count": seq["frame_count"],
             "start_frame": seq["start_frame"],
             "end_frame": seq["end_frame"],

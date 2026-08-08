@@ -442,7 +442,10 @@
         </button>
 
         <div class="next-note">Click "Use this folder" next to a folder in the tree that contains a numbered image sequence, or browse for one directly.</div>
-        <button id="ffmpeg-browse-button" class="small-button" type="button">Browse from Windows Explorer...</button>
+        <div id="ffmpeg-browse-zone" class="drop-zone" tabindex="0">
+          <div class="drop-zone-title">Browse for a folder</div>
+          <div>from Windows Explorer</div>
+        </div>
 
         <div id="ffmpeg-selected-path" class="next-note"></div>
         <div id="ffmpeg-detected-info" class="next-note"></div>
@@ -477,12 +480,18 @@
 
         <div class="field-group">
           <label class="field-label">Output filename</label>
-          <input type="text" id="ffmpeg-output-name" class="field-select" placeholder="output.mp4">
+          <input type="text" id="ffmpeg-output-name" class="field-select" placeholder="output">
+          <div class="next-note">.mp4 is added automatically, no need to type it.</div>
         </div>
 
         <div class="next-note">Codec: H.264 &middot; Container: MP4 (fixed)</div>
 
-        <button id="ffmpeg-convert-button" class="upload-button" type="button" disabled>Convert</button>
+        <label class="checkbox-row">
+          <input type="checkbox" id="ffmpeg-open-when-done" checked>
+          Open when done
+        </label>
+
+        <button id="ffmpeg-convert-button" class="upload-button" type="button" disabled>Render</button>
 
         <div id="ffmpeg-progress-wrap" class="archive-progress-wrap hidden">
           <div class="archive-progress-header">

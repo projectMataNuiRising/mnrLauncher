@@ -2125,13 +2125,13 @@ async function initFfmpegScreen() {
 }
 
 async function buildFfmpegLevel(container, pathParts, generation) {
-  const result = await window.pywebview.api.list_dir_entries(pathParts, false);
+  const result = await window.pywebview.api.list_dir_entries(pathParts, false, true);
   if (generation !== ffmpegTreeGeneration) return;
 
   if (!result.ok) {
     const msg = document.createElement("div");
     msg.className = "tree-name tree-missing";
-    msg.textContent = pathParts.length === 0 ? "(could not read 01-projects)" : "(empty)";
+    msg.textContent = pathParts.length === 0 ? "(could not read the pCloud drive)" : "(empty)";
     container.appendChild(msg);
     return;
   }
@@ -2176,9 +2176,10 @@ async function selectFfmpegFolder(pathParts, name) {
   ffmpegSelectedPath.textContent = `Selected: ${pathParts.join("/")}`;
   ffmpegDetectedInfo.textContent = "Reading frame sequence...";
   ffmpegConvertButton.disabled = true;
+  ffmpegConvertButton.classList.remove("ready");
   ffmpegSelected = null;
 
-  const info = await window.pywebview.api.inspect_frame_sequence(pathParts);
+  const info = await window.pywebview.api.inspect_frame_sequence(pathParts, true);
   if (!info.ok) {
     ffmpegDetectedInfo.textContent = info.detail;
     return;
@@ -2198,12 +2199,13 @@ async function selectFfmpegFolder(pathParts, name) {
   }
   ffmpegDetectedInfo.textContent = text;
 
-  if (!ffmpegOutputName.value) {
-    ffmpegOutputName.value = `${name}.mp4`;
-  }
+  // Defaults to the sequence's own name with frame numbers and
+  // periods already stripped off, still fully editable.
+  ffmpegOutputName.value = info.prefix;
 
   updateFfmpegScalePreview();
   ffmpegConvertButton.disabled = false;
+  ffmpegConvertButton.classList.add("ready");
 }
 
 function getFfmpegFramerate() {
@@ -2262,10 +2264,11 @@ ffmpegConvertButton.addEventListener("click", async () => {
   const framerate = getFfmpegFramerate();
   const scale = getFfmpegScalePercent();
   const bitrate = parseInt(ffmpegBitrateInput.value, 10) || 8000;
-  const outputName = ffmpegOutputName.value.trim() || `${ffmpegSelected.name}.mp4`;
+  const outputName = ffmpegOutputName.value.trim() || ffmpegSelected.name;
+  const openWhenDone = document.getElementById("ffmpeg-open-when-done").checked;
 
   const startResult = await window.pywebview.api.run_ffmpeg_convert(
-    ffmpegSelected.pathParts, framerate, bitrate, scale, outputName
+    ffmpegSelected.pathParts, framerate, bitrate, scale, outputName, true
   );
 
   if (!startResult.ok) {
@@ -2289,6 +2292,11 @@ ffmpegConvertButton.addEventListener("click", async () => {
         progress.ok ? "ok" : "fail"
       );
       ffmpegConvertButton.disabled = false;
+
+      if (progress.ok && openWhenDone) {
+        const outputParts = ffmpegSelected.pathParts.slice(0, -1).concat(progress.detail);
+        await window.pywebview.api.open_path(outputParts, true);
+      }
     }
   }, 500);
 });
@@ -2385,10 +2393,10 @@ const archivePathBar = createPathBar(archivePathInput, archivePathCopy, archiveP
 const ffmpegPathInput = document.getElementById("ffmpeg-path-input");
 const ffmpegPathCopy = document.getElementById("ffmpeg-path-copy");
 const ffmpegPathError = document.getElementById("ffmpeg-path-error");
-const ffmpegBrowseButton = document.getElementById("ffmpeg-browse-button");
+const ffmpegBrowseZone = document.getElementById("ffmpeg-browse-zone");
 
 const ffmpegPathBar = createPathBar(ffmpegPathInput, ffmpegPathCopy, ffmpegPathError, {
-  getFromRoot: () => false,
+  getFromRoot: () => true,
   getLockedParts: () => [],
   onNavigate: async (parts) => {
     const myGeneration = ++ffmpegTreeGeneration;
@@ -2398,7 +2406,7 @@ const ffmpegPathBar = createPathBar(ffmpegPathInput, ffmpegPathCopy, ffmpegPathE
   },
 });
 
-ffmpegBrowseButton.addEventListener("click", async () => {
+ffmpegBrowseZone.addEventListener("click", async () => {
   const result = await window.pywebview.api.browse_folder();
   if (!result.ok) {
     addFfmpegStatusLine(`Could not open the folder browser: ${result.detail}`, "fail");
@@ -2406,7 +2414,7 @@ ffmpegBrowseButton.addEventListener("click", async () => {
   }
   if (!result.path) return; // cancelled
 
-  const resolved = await window.pywebview.api.resolve_path_to_parts(result.path, false);
+  const resolved = await window.pywebview.api.resolve_path_to_parts(result.path, true);
   if (!resolved.ok) {
     ffmpegPathError.textContent = resolved.detail;
     return;
