@@ -1093,7 +1093,7 @@ class MnrApi:
             "height": height,
         }
 
-    def run_ffmpeg_convert(self, relative_parts, framerate, bitrate_kbps, scale_percent, output_name, from_root=False):
+    def run_ffmpeg_convert(self, relative_parts, framerate, bitrate_kbps, scale_percent, output_name, output_folder_parts=None, from_root=False):
         if _FFMPEG_PROGRESS["active"]:
             return {"ok": False, "detail": "A previous conversion is still in progress"}
 
@@ -1106,9 +1106,16 @@ class MnrApi:
         if not seq:
             return {"ok": False, "detail": "No numbered image sequence found in this folder"}
 
-        parent_dir = os.path.dirname(folder_path)
+        if output_folder_parts:
+            output_dir = _resolve_pcloud_path(output_folder_parts, from_root)
+        else:
+            output_dir = os.path.dirname(folder_path)
+
+        if not os.path.isdir(output_dir):
+            return {"ok": False, "detail": "Output folder does not exist"}
+
         clean_name = output_name if output_name.lower().endswith(".mp4") else f"{output_name}.mp4"
-        output_path = os.path.join(parent_dir, clean_name)
+        output_path = os.path.join(output_dir, clean_name)
         if os.path.exists(output_path):
             return {"ok": False, "detail": "A file with that output name already exists"}
 

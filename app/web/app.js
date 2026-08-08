@@ -2057,6 +2057,9 @@ const ffmpegScaleSelect = document.getElementById("ffmpeg-scale");
 const ffmpegScaleCustom = document.getElementById("ffmpeg-scale-custom");
 const ffmpegScalePreview = document.getElementById("ffmpeg-scale-preview");
 const ffmpegBitrateInput = document.getElementById("ffmpeg-bitrate");
+const ffmpegOutputFolderInput = document.getElementById("ffmpeg-output-folder-input");
+const ffmpegOutputFolderCopy = document.getElementById("ffmpeg-output-folder-copy");
+const ffmpegOutputFolderError = document.getElementById("ffmpeg-output-folder-error");
 const ffmpegOutputName = document.getElementById("ffmpeg-output-name");
 const ffmpegConvertButton = document.getElementById("ffmpeg-convert-button");
 const ffmpegProgressWrap = document.getElementById("ffmpeg-progress-wrap");
@@ -2067,6 +2070,7 @@ const ffmpegStatus = document.getElementById("ffmpeg-status");
 
 let ffmpegTreeGeneration = 0;
 let ffmpegSelected = null; // {pathParts, name, width, height, frameCount}
+let ffmpegOutputFolderParts = null;
 
 ffmpegBack.addEventListener("click", () => {
   showScreen("home");
@@ -2216,6 +2220,11 @@ async function selectFfmpegFolder(pathParts, name) {
   // periods already stripped off, still fully editable.
   ffmpegOutputName.value = info.prefix;
 
+  // Defaults to the same folder the sequence lives in, shown here so
+  // it's visible the moment a folder is picked, still editable.
+  ffmpegOutputFolderParts = pathParts.slice(0, -1);
+  ffmpegOutputFolderPathBar.setDisplay(ffmpegOutputFolderParts);
+
   updateFfmpegScalePreview();
   ffmpegConvertButton.disabled = false;
   ffmpegConvertButton.classList.add("ready");
@@ -2278,10 +2287,11 @@ ffmpegConvertButton.addEventListener("click", async () => {
   const scale = getFfmpegScalePercent();
   const bitrate = parseInt(ffmpegBitrateInput.value, 10) || 8000;
   const outputName = ffmpegOutputName.value.trim() || ffmpegSelected.name;
+  const outputFolder = ffmpegOutputFolderParts || ffmpegSelected.pathParts.slice(0, -1);
   const openWhenDone = document.getElementById("ffmpeg-open-when-done").checked;
 
   const startResult = await window.pywebview.api.run_ffmpeg_convert(
-    ffmpegSelected.pathParts, framerate, bitrate, scale, outputName, true
+    ffmpegSelected.pathParts, framerate, bitrate, scale, outputName, outputFolder, true
   );
 
   if (!startResult.ok) {
@@ -2307,7 +2317,7 @@ ffmpegConvertButton.addEventListener("click", async () => {
       ffmpegConvertButton.disabled = false;
 
       if (progress.ok && openWhenDone) {
-        const outputParts = ffmpegSelected.pathParts.slice(0, -1).concat(progress.detail);
+        const outputParts = outputFolder.concat(progress.detail);
         await window.pywebview.api.open_path(outputParts, true);
       }
     }
@@ -2420,6 +2430,18 @@ const ffmpegPathBar = createPathBar(ffmpegPathInput, ffmpegPathCopy, ffmpegPathE
     await selectFfmpegFolder(parts, name);
   },
 });
+
+const ffmpegOutputFolderPathBar = createPathBar(
+  ffmpegOutputFolderInput, ffmpegOutputFolderCopy, ffmpegOutputFolderError,
+  {
+    getFromRoot: () => true,
+    getLockedParts: () => [],
+    onNavigate: (parts) => {
+      ffmpegOutputFolderParts = parts;
+      ffmpegOutputFolderPathBar.setDisplay(parts);
+    },
+  }
+);
 
 ffmpegBrowseZone.addEventListener("click", async () => {
   const result = await window.pywebview.api.browse_folder();
