@@ -195,6 +195,13 @@
           </span>
           <span class="tile-label">Archive / Restore</span>
         </button>
+        <button class="tile" data-tool="ffmpeg" id="ffmpeg-tile">
+          <span class="tile-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="14" height="14" rx="2"/><path d="M22 8l-6 4 6 4V8z"/></svg>
+          </span>
+          <span class="tile-label">Frames to MP4</span>
+          <span id="ffmpeg-tile-badge" class="tile-badge">Checking...</span>
+        </button>
       </div>
     </div>
   </div>
@@ -405,6 +412,83 @@
 
       <div class="smanim-right" id="archive-right">
         <div id="archive-tree-root" class="tree-root"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Frames to MP4 tool -->
+  <div id="ffmpeg-screen" class="screen smanim-screen hidden">
+    <div class="smanim-layout">
+
+      <div class="smanim-left" id="ffmpeg-left">
+        <button id="ffmpeg-back" class="back-button">
+          <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M11 18l-6-6 6-6"/></svg></span>
+          Home
+        </button>
+
+        <div class="next-note">Click "Use this folder" next to a folder in the tree that contains a numbered image sequence.</div>
+
+        <div id="ffmpeg-selected-path" class="next-note"></div>
+        <div id="ffmpeg-detected-info" class="next-note"></div>
+
+        <div class="field-group">
+          <label class="field-label">Frame rate</label>
+          <select id="ffmpeg-framerate" class="field-select">
+            <option value="12" selected>12</option>
+            <option value="24">24</option>
+            <option value="custom">Custom...</option>
+          </select>
+          <input type="number" id="ffmpeg-framerate-custom" class="field-select hidden" placeholder="Custom fps" min="1">
+        </div>
+
+        <div class="field-group">
+          <label class="field-label">Scale</label>
+          <select id="ffmpeg-scale" class="field-select">
+            <option value="100" selected>100%</option>
+            <option value="75">75%</option>
+            <option value="50">50%</option>
+            <option value="25">25%</option>
+            <option value="custom">Custom...</option>
+          </select>
+          <input type="number" id="ffmpeg-scale-custom" class="field-select hidden" placeholder="Custom %" min="1" max="100">
+        </div>
+        <div id="ffmpeg-scale-preview" class="next-note"></div>
+
+        <div class="field-group">
+          <label class="field-label">Bitrate (kbps)</label>
+          <input type="number" id="ffmpeg-bitrate" class="field-select" value="8000" min="500">
+        </div>
+
+        <div class="field-group">
+          <label class="field-label">Output filename</label>
+          <input type="text" id="ffmpeg-output-name" class="field-select" placeholder="output.mp4">
+        </div>
+
+        <div class="next-note">Codec: H.264 &middot; Container: MP4 (fixed)</div>
+
+        <button id="ffmpeg-convert-button" class="upload-button" type="button" disabled>Convert</button>
+
+        <div id="ffmpeg-progress-wrap" class="archive-progress-wrap hidden">
+          <div class="archive-progress-header">
+            <div class="archive-progress-spinner"></div>
+            <div class="archive-progress-track">
+              <div id="ffmpeg-progress-bar" class="archive-progress-bar"></div>
+            </div>
+          </div>
+          <div class="archive-progress-info">
+            <span id="ffmpeg-progress-percent">0%</span>
+            <span id="ffmpeg-progress-frames"></span>
+          </div>
+        </div>
+
+        <div id="ffmpeg-status" class="upload-status"></div>
+      </div>
+
+      <div class="smanim-divider" id="ffmpeg-divider"></div>
+
+      <div class="smanim-right" id="ffmpeg-right">
+        <div id="ffmpeg-tree-root" class="tree-root"></div>
       </div>
 
     </div>

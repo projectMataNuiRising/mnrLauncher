@@ -613,6 +613,10 @@ body {
   color: var(--text);
 }
 
+.field-select + .field-select {
+  margin-top: 6px;
+}
+
 .field-select:disabled {
   background: var(--panel);
   color: var(--muted);

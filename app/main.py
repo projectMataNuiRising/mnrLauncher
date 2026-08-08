@@ -290,6 +290,155 @@ def _extract_rawtherapee_version(rt_version_dir):
     return match.group(1) if match else "?"
 
 
+def _resolve_ffmpeg_paths():
+    root = get_pcloud_root()
+    ff_root = os.path.join(root, "02-pipeline", "apps", "ffmpeg", "01-latest")
+
+    pipeline_build_dir = _find_first_subfolder(ff_root)
+    if not pipeline_build_dir:
+        return None
+
+    ff_version_dir = _find_first_subfolder(pipeline_build_dir)
+    if not ff_version_dir:
+        return None
+
+    # Real gyan.dev/BtbN builds put the exe inside a bin/ subfolder,
+    # but check the root too in case someone flattens it.
+    for candidate in (os.path.join(ff_version_dir, "bin", "ffmpeg.exe"), os.path.join(ff_version_dir, "ffmpeg.exe")):
+        if os.path.isfile(candidate):
+            return {
+                "pipeline_build_dir": pipeline_build_dir,
+                "ffmpeg_version_dir": ff_version_dir,
+                "exe_path": candidate,
+            }
+    return None
+
+
+_FFMPEG_VERSION_RE = re.compile(r"ffmpeg-([\d.]+)", re.IGNORECASE)
+
+
+def _extract_ffmpeg_version(ff_version_dir):
+    match = _FFMPEG_VERSION_RE.search(os.path.basename(ff_version_dir))
+    return match.group(1) if match else "?"
+
+
+# ------------------------------------------------------------
+# Frames to MP4 tool. Detects a numbered image sequence matching the
+# basename.NNNN.ext convention already used throughout the pipeline
+# (e.g. BFP102_SQ06_SH07_smAnim_gali01-main_v001.1001.jpg), reads the
+# real resolution off the first frame, and runs ffmpeg on a background
+# thread so the UI can show live frame-based progress.
+# ------------------------------------------------------------
+
+_FRAME_SEQ_RE = re.compile(r"^(.+)\.(\d+)\.(\w+)$")
+_FRAME_SEQ_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".exr", ".cr2", ".cr3", ".dpx"}
+
+
+def _detect_frame_sequence(folder_path):
+    entries = _safe_listdir(folder_path)
+    if not entries:
+        return None
+
+    groups = {}  # (prefix, ext, padding) -> [(frame_num, filename), ...]
+    for name in entries:
+        full = os.path.join(folder_path, name)
+        if not os.path.isfile(full):
+            continue
+        ext = os.path.splitext(name)[1].lower()
+        if ext not in _FRAME_SEQ_IMAGE_EXTS:
+            continue
+        m = _FRAME_SEQ_RE.match(name)
+        if not m:
+            continue
+        prefix, frame_str, file_ext = m.group(1), m.group(2), m.group(3)
+        key = (prefix, file_ext.lower(), len(frame_str))
+        groups.setdefault(key, []).append((int(frame_str), name))
+
+    if not groups:
+        return None
+
+    # The biggest group is almost certainly the real sequence, in case
+    # a stray differently-named file or two is sitting in the folder.
+    best_key = max(groups.keys(), key=lambda k: len(groups[k]))
+    prefix, ext, padding = best_key
+    frames = sorted(groups[best_key], key=lambda x: x[0])
+    frame_numbers = [f[0] for f in frames]
+    start_frame = frame_numbers[0]
+    end_frame = frame_numbers[-1]
+    expected_count = end_frame - start_frame + 1
+    actual_count = len(frame_numbers)
+
+    return {
+        "prefix": prefix,
+        "ext": ext,
+        "padding": padding,
+        "start_frame": start_frame,
+        "end_frame": end_frame,
+        "frame_count": actual_count,
+        "has_gaps": actual_count != expected_count,
+        "first_file": frames[0][1],
+    }
+
+
+_FFMPEG_PROGRESS = {
+    "active": False,
+    "done": False,
+    "ok": False,
+    "detail": "",
+    "total_frames": 0,
+    "current_frame": 0,
+}
+
+_FFMPEG_FRAME_LOG_RE = re.compile(r"frame=\s*(\d+)")
+
+
+def _run_ffmpeg_worker(exe_path, folder_path, seq, framerate, bitrate_kbps, scale_percent, output_path):
+    input_pattern = os.path.join(folder_path, f"{seq['prefix']}.%0{seq['padding']}d.{seq['ext']}")
+    scale_factor = scale_percent / 100.0
+
+    cmd = [
+        exe_path,
+        "-y",
+        "-start_number", str(seq["start_frame"]),
+        "-framerate", str(framerate),
+        "-i", input_pattern,
+        "-vf", f"scale=iw*{scale_factor}:ih*{scale_factor}",
+        "-c:v", "libx264",
+        "-b:v", f"{bitrate_kbps}k",
+        "-pix_fmt", "yuv420p",
+        output_path,
+    ]
+
+    _FFMPEG_PROGRESS["total_frames"] = seq["frame_count"]
+
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        for line in process.stdout:
+            m = _FFMPEG_FRAME_LOG_RE.search(line)
+            if m:
+                _FFMPEG_PROGRESS["current_frame"] = int(m.group(1))
+        process.wait()
+
+        if process.returncode == 0 and os.path.isfile(output_path):
+            _FFMPEG_PROGRESS["ok"] = True
+            _FFMPEG_PROGRESS["detail"] = os.path.basename(output_path)
+        else:
+            _FFMPEG_PROGRESS["ok"] = False
+            _FFMPEG_PROGRESS["detail"] = f"ffmpeg exited with code {process.returncode}"
+    except Exception as e:
+        _FFMPEG_PROGRESS["ok"] = False
+        _FFMPEG_PROGRESS["detail"] = str(e)
+
+    _FFMPEG_PROGRESS["active"] = False
+    _FFMPEG_PROGRESS["done"] = True
+
+
 # ------------------------------------------------------------
 # pCloud process heuristic (best-effort, there is no official API)
 # ------------------------------------------------------------
@@ -864,6 +1013,95 @@ class MnrApi:
             "current_item": _ARCHIVE_PROGRESS["current_item"],
             "eta_seconds": eta_seconds,
             "results": list(_ARCHIVE_PROGRESS["results"]),
+        }
+
+    # --------------------------------------------------------
+    # Frames to MP4 tool
+    # --------------------------------------------------------
+
+    def get_ffmpeg_info(self):
+        if platform.system() != "Windows":
+            return {"ok": False, "supported": False, "detail": "Windows only for now"}
+
+        paths = _resolve_ffmpeg_paths()
+        if not paths:
+            return {"ok": False, "supported": True, "detail": "No ffmpeg build found in the pipeline folder"}
+
+        version = _extract_ffmpeg_version(paths["ffmpeg_version_dir"])
+        return {"ok": True, "supported": True, "version": version}
+
+    def inspect_frame_sequence(self, relative_parts, from_root=False):
+        folder_path = _resolve_pcloud_path(relative_parts, from_root)
+        if not os.path.isdir(folder_path):
+            return {"ok": False, "detail": "Folder not found"}
+
+        seq = _detect_frame_sequence(folder_path)
+        if not seq:
+            return {"ok": False, "detail": "No numbered image sequence found in this folder"}
+
+        first_file_path = os.path.join(folder_path, seq["first_file"])
+        try:
+            from PIL import Image
+            with Image.open(first_file_path) as img:
+                width, height = img.size
+        except Exception as e:
+            return {"ok": False, "detail": f"Could not read frame resolution: {e}"}
+
+        return {
+            "ok": True,
+            "frame_count": seq["frame_count"],
+            "start_frame": seq["start_frame"],
+            "end_frame": seq["end_frame"],
+            "has_gaps": seq["has_gaps"],
+            "width": width,
+            "height": height,
+        }
+
+    def run_ffmpeg_convert(self, relative_parts, framerate, bitrate_kbps, scale_percent, output_name, from_root=False):
+        if _FFMPEG_PROGRESS["active"]:
+            return {"ok": False, "detail": "A previous conversion is still in progress"}
+
+        paths = _resolve_ffmpeg_paths()
+        if not paths:
+            return {"ok": False, "detail": "Could not find ffmpeg in the pipeline folder"}
+
+        folder_path = _resolve_pcloud_path(relative_parts, from_root)
+        seq = _detect_frame_sequence(folder_path)
+        if not seq:
+            return {"ok": False, "detail": "No numbered image sequence found in this folder"}
+
+        parent_dir = os.path.dirname(folder_path)
+        clean_name = output_name if output_name.lower().endswith(".mp4") else f"{output_name}.mp4"
+        output_path = os.path.join(parent_dir, clean_name)
+        if os.path.exists(output_path):
+            return {"ok": False, "detail": "A file with that output name already exists"}
+
+        _FFMPEG_PROGRESS["active"] = True
+        _FFMPEG_PROGRESS["done"] = False
+        _FFMPEG_PROGRESS["ok"] = False
+        _FFMPEG_PROGRESS["detail"] = ""
+        _FFMPEG_PROGRESS["current_frame"] = 0
+
+        thread = threading.Thread(
+            target=_run_ffmpeg_worker,
+            args=(paths["exe_path"], folder_path, seq, framerate, bitrate_kbps, scale_percent, output_path),
+            daemon=True,
+        )
+        thread.start()
+        return {"ok": True}
+
+    def get_ffmpeg_progress(self):
+        total = _FFMPEG_PROGRESS["total_frames"]
+        current = _FFMPEG_PROGRESS["current_frame"]
+        percent = 100 if total <= 0 else min(100, int((current / total) * 100))
+        return {
+            "active": _FFMPEG_PROGRESS["active"],
+            "done": _FFMPEG_PROGRESS["done"],
+            "ok": _FFMPEG_PROGRESS["ok"],
+            "detail": _FFMPEG_PROGRESS["detail"],
+            "percent": percent,
+            "current_frame": current,
+            "total_frames": total,
         }
 
     # --------------------------------------------------------

@@ -11,6 +11,7 @@ const screens = {
   placeholder: document.getElementById("placeholder-screen"),
   smanim: document.getElementById("smanim-screen"),
   archive: document.getElementById("archive-screen"),
+  ffmpeg: document.getElementById("ffmpeg-screen"),
 };
 
 const topbar = document.getElementById("topbar");
@@ -315,6 +316,7 @@ async function runBoot() {
   setInterval(pollTransferActivity, 20000);
   refreshBlenderTile();
   refreshRawtherapeeTile();
+  refreshFfmpegTile();
 
   const savedUser = await window.pywebview.api.get_saved_user();
   if (savedUser && allUsers.includes(savedUser)) {
@@ -390,6 +392,9 @@ document.querySelectorAll(".tile").forEach(tile => {
     } else if (tool === "archive") {
       showScreen("archive");
       initArchiveScreen();
+    } else if (tool === "ffmpeg") {
+      showScreen("ffmpeg");
+      initFfmpegScreen();
     }
   });
 });
@@ -2018,4 +2023,269 @@ archiveRunButton.addEventListener("click", async () => {
     archiveProgressCurrent.textContent = "Cancelling, cleaning up the item currently in progress...";
     await window.pywebview.api.cancel_archive_queue();
   };
+});
+
+// ---------------------------------------------------------------
+// Frames to MP4 tool. Browse to a folder containing a numbered image
+// sequence, pick frame rate / scale / bitrate, and run ffmpeg on a
+// background thread with live frame-based progress. Deliberately
+// simple: fixed to H.264 in an MP4 container, no cropping (source
+// aspect ratio is always kept), no full-system override, just enough
+// options to be useful.
+// ---------------------------------------------------------------
+
+const ffmpegBack = document.getElementById("ffmpeg-back");
+const ffmpegLeft = document.getElementById("ffmpeg-left");
+const ffmpegDivider = document.getElementById("ffmpeg-divider");
+const ffmpegRight = document.getElementById("ffmpeg-right");
+const ffmpegTreeRoot = document.getElementById("ffmpeg-tree-root");
+const ffmpegTile = document.getElementById("ffmpeg-tile");
+const ffmpegTileBadge = document.getElementById("ffmpeg-tile-badge");
+const ffmpegSelectedPath = document.getElementById("ffmpeg-selected-path");
+const ffmpegDetectedInfo = document.getElementById("ffmpeg-detected-info");
+const ffmpegFramerateSelect = document.getElementById("ffmpeg-framerate");
+const ffmpegFramerateCustom = document.getElementById("ffmpeg-framerate-custom");
+const ffmpegScaleSelect = document.getElementById("ffmpeg-scale");
+const ffmpegScaleCustom = document.getElementById("ffmpeg-scale-custom");
+const ffmpegScalePreview = document.getElementById("ffmpeg-scale-preview");
+const ffmpegBitrateInput = document.getElementById("ffmpeg-bitrate");
+const ffmpegOutputName = document.getElementById("ffmpeg-output-name");
+const ffmpegConvertButton = document.getElementById("ffmpeg-convert-button");
+const ffmpegProgressWrap = document.getElementById("ffmpeg-progress-wrap");
+const ffmpegProgressBar = document.getElementById("ffmpeg-progress-bar");
+const ffmpegProgressPercent = document.getElementById("ffmpeg-progress-percent");
+const ffmpegProgressFrames = document.getElementById("ffmpeg-progress-frames");
+const ffmpegStatus = document.getElementById("ffmpeg-status");
+
+let ffmpegTreeGeneration = 0;
+let ffmpegSelected = null; // {pathParts, name, width, height, frameCount}
+
+ffmpegBack.addEventListener("click", () => {
+  showScreen("home");
+});
+
+(function setupFfmpegDivider() {
+  let dragging = false;
+  ffmpegDivider.addEventListener("mousedown", () => {
+    dragging = true;
+    ffmpegDivider.classList.add("dragging");
+    document.body.style.userSelect = "none";
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const rect = ffmpegLeft.parentElement.getBoundingClientRect();
+    let leftPercent = ((e.clientX - rect.left) / rect.width) * 100;
+    leftPercent = Math.max(25, Math.min(80, leftPercent));
+    ffmpegLeft.style.flex = `0 0 ${leftPercent}%`;
+    ffmpegRight.style.flex = `1 1 ${100 - leftPercent}%`;
+  });
+  document.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    ffmpegDivider.classList.remove("dragging");
+    document.body.style.userSelect = "";
+  });
+})();
+
+async function refreshFfmpegTile() {
+  try {
+    const info = await window.pywebview.api.get_ffmpeg_info();
+    if (!info.supported) {
+      ffmpegTile.classList.add("hidden");
+    } else if (info.ok) {
+      ffmpegTile.classList.remove("hidden", "tile-disabled");
+      ffmpegTileBadge.textContent = `v${info.version}`;
+    } else {
+      ffmpegTile.classList.remove("hidden");
+      ffmpegTileBadge.textContent = "Not found";
+      ffmpegTile.classList.add("tile-disabled");
+    }
+  } catch (e) {
+    ffmpegTile.classList.remove("hidden");
+    ffmpegTileBadge.textContent = "Not found";
+    ffmpegTile.classList.add("tile-disabled");
+  }
+}
+
+async function initFfmpegScreen() {
+  ffmpegSelected = null;
+  ffmpegSelectedPath.textContent = "";
+  ffmpegDetectedInfo.textContent = "";
+  ffmpegScalePreview.textContent = "";
+  ffmpegStatus.innerHTML = "";
+  ffmpegOutputName.value = "";
+  ffmpegConvertButton.disabled = true;
+
+  const myGeneration = ++ffmpegTreeGeneration;
+  ffmpegTreeRoot.innerHTML = "";
+  await buildFfmpegLevel(ffmpegTreeRoot, [], myGeneration);
+}
+
+async function buildFfmpegLevel(container, pathParts, generation) {
+  const result = await window.pywebview.api.list_dir_entries(pathParts, false);
+  if (generation !== ffmpegTreeGeneration) return;
+
+  if (!result.ok) {
+    const msg = document.createElement("div");
+    msg.className = "tree-name tree-missing";
+    msg.textContent = pathParts.length === 0 ? "(could not read 01-projects)" : "(empty)";
+    container.appendChild(msg);
+    return;
+  }
+
+  for (const item of result.items) {
+    if (!item.is_dir) continue; // only folders matter for this tool
+    const nextParts = pathParts.concat(item.name);
+    const depth = pathParts.length;
+    const { row, toggle } = makeRow(item.name, true, depth);
+    container.appendChild(row);
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "tree-action-button";
+    btn.textContent = "Use this folder";
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      selectFfmpegFolder(nextParts, item.name);
+    });
+    row.appendChild(btn);
+
+    let childrenContainer = null;
+    let expanded = false;
+
+    row.addEventListener("click", async () => {
+      if (!childrenContainer) {
+        childrenContainer = document.createElement("div");
+        childrenContainer.className = "tree-children";
+        row.insertAdjacentElement("afterend", childrenContainer);
+      }
+      expanded = !expanded;
+      toggle.textContent = expanded ? "\u25bc" : "\u25b6";
+      childrenContainer.style.display = expanded ? "block" : "none";
+      if (expanded && childrenContainer.childElementCount === 0) {
+        await buildFfmpegLevel(childrenContainer, nextParts, generation);
+      }
+    });
+  }
+}
+
+async function selectFfmpegFolder(pathParts, name) {
+  ffmpegSelectedPath.textContent = `Selected: ${pathParts.join("/")}`;
+  ffmpegDetectedInfo.textContent = "Reading frame sequence...";
+  ffmpegConvertButton.disabled = true;
+  ffmpegSelected = null;
+
+  const info = await window.pywebview.api.inspect_frame_sequence(pathParts);
+  if (!info.ok) {
+    ffmpegDetectedInfo.textContent = info.detail;
+    return;
+  }
+
+  ffmpegSelected = {
+    pathParts,
+    name,
+    width: info.width,
+    height: info.height,
+    frameCount: info.frame_count,
+  };
+
+  let text = `${info.frame_count} frames (${info.start_frame}-${info.end_frame}), ${info.width}x${info.height}`;
+  if (info.has_gaps) {
+    text += " \u2014 warning: gaps detected in the frame numbers";
+  }
+  ffmpegDetectedInfo.textContent = text;
+
+  if (!ffmpegOutputName.value) {
+    ffmpegOutputName.value = `${name}.mp4`;
+  }
+
+  updateFfmpegScalePreview();
+  ffmpegConvertButton.disabled = false;
+}
+
+function getFfmpegFramerate() {
+  if (ffmpegFramerateSelect.value === "custom") {
+    return parseFloat(ffmpegFramerateCustom.value) || 12;
+  }
+  return parseFloat(ffmpegFramerateSelect.value);
+}
+
+function getFfmpegScalePercent() {
+  if (ffmpegScaleSelect.value === "custom") {
+    return parseFloat(ffmpegScaleCustom.value) || 100;
+  }
+  return parseFloat(ffmpegScaleSelect.value);
+}
+
+function updateFfmpegScalePreview() {
+  if (!ffmpegSelected) {
+    ffmpegScalePreview.textContent = "";
+    return;
+  }
+  const scale = getFfmpegScalePercent();
+  const outW = Math.round(ffmpegSelected.width * (scale / 100));
+  const outH = Math.round(ffmpegSelected.height * (scale / 100));
+  ffmpegScalePreview.textContent = `Output size: ${outW}x${outH}`;
+}
+
+ffmpegFramerateSelect.addEventListener("change", () => {
+  ffmpegFramerateCustom.classList.toggle("hidden", ffmpegFramerateSelect.value !== "custom");
+});
+
+ffmpegScaleSelect.addEventListener("change", () => {
+  ffmpegScaleCustom.classList.toggle("hidden", ffmpegScaleSelect.value !== "custom");
+  updateFfmpegScalePreview();
+});
+
+ffmpegScaleCustom.addEventListener("input", updateFfmpegScalePreview);
+
+function addFfmpegStatusLine(text, kind) {
+  const line = document.createElement("div");
+  line.textContent = text;
+  line.className = kind === "ok" ? "boot-line-ok" : kind === "fail" ? "boot-line-fail" : "boot-line-info";
+  ffmpegStatus.appendChild(line);
+}
+
+ffmpegConvertButton.addEventListener("click", async () => {
+  if (!ffmpegSelected) return;
+
+  ffmpegConvertButton.disabled = true;
+  ffmpegStatus.innerHTML = "";
+  ffmpegProgressWrap.classList.remove("hidden");
+  ffmpegProgressBar.style.width = "0%";
+  ffmpegProgressPercent.textContent = "0%";
+  ffmpegProgressFrames.textContent = "";
+
+  const framerate = getFfmpegFramerate();
+  const scale = getFfmpegScalePercent();
+  const bitrate = parseInt(ffmpegBitrateInput.value, 10) || 8000;
+  const outputName = ffmpegOutputName.value.trim() || `${ffmpegSelected.name}.mp4`;
+
+  const startResult = await window.pywebview.api.run_ffmpeg_convert(
+    ffmpegSelected.pathParts, framerate, bitrate, scale, outputName
+  );
+
+  if (!startResult.ok) {
+    ffmpegProgressWrap.classList.add("hidden");
+    addFfmpegStatusLine(`Could not start: ${startResult.detail}`, "fail");
+    ffmpegConvertButton.disabled = false;
+    return;
+  }
+
+  const pollInterval = setInterval(async () => {
+    const progress = await window.pywebview.api.get_ffmpeg_progress();
+    ffmpegProgressBar.style.width = `${progress.percent}%`;
+    ffmpegProgressPercent.textContent = `${progress.percent}%`;
+    ffmpegProgressFrames.textContent = `frame ${progress.current_frame} / ${progress.total_frames}`;
+
+    if (progress.done) {
+      clearInterval(pollInterval);
+      ffmpegProgressWrap.classList.add("hidden");
+      addFfmpegStatusLine(
+        progress.ok ? `[OK] Created ${progress.detail}` : `[FAIL] ${progress.detail}`,
+        progress.ok ? "ok" : "fail"
+      );
+      ffmpegConvertButton.disabled = false;
+    }
+  }, 500);
 });
