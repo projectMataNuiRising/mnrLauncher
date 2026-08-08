@@ -92,7 +92,12 @@ def _path_to_relative_parts(absolute_path, base_root):
     if abs_cmp == base_cmp:
         return []
 
-    prefix = base_cmp + os.sep
+    # base_cmp might already end in a separator, a bare drive root like
+    # "P:\" normalizes to itself (unlike a normal subfolder path), so
+    # strip any trailing separator before adding exactly one back.
+    # Skipping this produced a double separator ("P:\\") that could
+    # never match a real path, breaking every whole-drive path check.
+    prefix = base_cmp.rstrip(os.sep) + os.sep
     if not abs_cmp.startswith(prefix):
         return None
 
