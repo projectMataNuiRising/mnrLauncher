@@ -500,6 +500,7 @@ class MnrApi:
             "shell_version": SHELL_VERSION,
             "dev_exe": os.environ.get("MNR_DEV_EXE") == "1",
             "dev_app_code": os.environ.get("MNR_DEV_APP_CODE") == "1",
+            "platform": platform.system(),
         }
 
     def get_dev_settings(self):

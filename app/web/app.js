@@ -92,16 +92,17 @@ async function refreshBlenderTile() {
   try {
     const info = await window.pywebview.api.get_blender_info();
     if (!info.supported) {
-      blenderTileBadge.textContent = "Windows only";
-      blenderTile.classList.add("tile-disabled");
+      blenderTile.classList.add("hidden");
     } else if (info.ok) {
+      blenderTile.classList.remove("hidden", "tile-disabled");
       blenderTileBadge.textContent = `v${info.version}`;
-      blenderTile.classList.remove("tile-disabled");
     } else {
+      blenderTile.classList.remove("hidden");
       blenderTileBadge.textContent = "Not found";
       blenderTile.classList.add("tile-disabled");
     }
   } catch (e) {
+    blenderTile.classList.remove("hidden");
     blenderTileBadge.textContent = "Not found";
     blenderTile.classList.add("tile-disabled");
   }
@@ -140,16 +141,17 @@ async function refreshRawtherapeeTile() {
   try {
     const info = await window.pywebview.api.get_rawtherapee_info();
     if (!info.supported) {
-      rawtherapeeTileBadge.textContent = "Windows only";
-      rawtherapeeTile.classList.add("tile-disabled");
+      rawtherapeeTile.classList.add("hidden");
     } else if (info.ok) {
+      rawtherapeeTile.classList.remove("hidden", "tile-disabled");
       rawtherapeeTileBadge.textContent = `v${info.version}`;
-      rawtherapeeTile.classList.remove("tile-disabled");
     } else {
+      rawtherapeeTile.classList.remove("hidden");
       rawtherapeeTileBadge.textContent = "Not found";
       rawtherapeeTile.classList.add("tile-disabled");
     }
   } catch (e) {
+    rawtherapeeTile.classList.remove("hidden");
     rawtherapeeTileBadge.textContent = "Not found";
     rawtherapeeTile.classList.add("tile-disabled");
   }
