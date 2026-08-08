@@ -1758,7 +1758,7 @@ function fileCountColor(count) {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
-async function buildArchiveLevel(container, pathParts, generation, overrideOn) {
+async function buildArchiveLevel(container, pathParts, generation, overrideOn, autoPath = []) {
   const result = await window.pywebview.api.list_dir_entries(pathParts, false, overrideOn);
   if (generation !== archiveTreeGeneration) return;
 
@@ -1834,7 +1834,7 @@ async function buildArchiveLevel(container, pathParts, generation, overrideOn) {
       toggle.textContent = expanded ? "\u25bc" : "\u25b6";
       childrenContainer.style.display = expanded ? "block" : "none";
       if (expanded && childrenContainer.childElementCount === 0) {
-        await buildArchiveLevel(childrenContainer, nextParts, generation, overrideOn);
+        await buildArchiveLevel(childrenContainer, nextParts, generation, overrideOn, autoPath);
       }
     }
 
@@ -1845,6 +1845,12 @@ async function buildArchiveLevel(container, pathParts, generation, overrideOn) {
         const res = await window.pywebview.api.open_path(nextParts, overrideOn);
         if (!res.ok) console.error("open_path failed", res.detail);
       });
+    }
+
+    const shouldAutoExpand =
+      item.is_dir && pathParts.length < autoPath.length && item.name === autoPath[pathParts.length];
+    if (shouldAutoExpand) {
+      await doExpand();
     }
   }
 }
@@ -2124,7 +2130,7 @@ async function initFfmpegScreen() {
   ffmpegPathBar.setDisplay([]);
 }
 
-async function buildFfmpegLevel(container, pathParts, generation) {
+async function buildFfmpegLevel(container, pathParts, generation, autoPath = []) {
   const result = await window.pywebview.api.list_dir_entries(pathParts, false, true);
   if (generation !== ffmpegTreeGeneration) return;
 
@@ -2156,7 +2162,7 @@ async function buildFfmpegLevel(container, pathParts, generation) {
     let childrenContainer = null;
     let expanded = false;
 
-    row.addEventListener("click", async () => {
+    async function doExpand() {
       if (!childrenContainer) {
         childrenContainer = document.createElement("div");
         childrenContainer.className = "tree-children";
@@ -2166,9 +2172,16 @@ async function buildFfmpegLevel(container, pathParts, generation) {
       toggle.textContent = expanded ? "\u25bc" : "\u25b6";
       childrenContainer.style.display = expanded ? "block" : "none";
       if (expanded && childrenContainer.childElementCount === 0) {
-        await buildFfmpegLevel(childrenContainer, nextParts, generation);
+        await buildFfmpegLevel(childrenContainer, nextParts, generation, autoPath);
       }
-    });
+    }
+
+    row.addEventListener("click", () => doExpand());
+
+    const shouldAutoExpand = pathParts.length < autoPath.length && item.name === autoPath[pathParts.length];
+    if (shouldAutoExpand) {
+      await doExpand();
+    }
   }
 }
 
@@ -2384,7 +2397,7 @@ const archivePathBar = createPathBar(archivePathInput, archivePathCopy, archiveP
     const myGeneration = ++archiveTreeGeneration;
     archiveTreeRoot.innerHTML = "";
     const overrideOn = archiveOverrideToggle.checked;
-    await buildArchiveLevel(archiveTreeRoot, parts, myGeneration, overrideOn);
+    await buildArchiveLevel(archiveTreeRoot, [], myGeneration, overrideOn, parts);
     archivePathBar.setDisplay(parts);
   },
 });
@@ -2401,8 +2414,10 @@ const ffmpegPathBar = createPathBar(ffmpegPathInput, ffmpegPathCopy, ffmpegPathE
   onNavigate: async (parts) => {
     const myGeneration = ++ffmpegTreeGeneration;
     ffmpegTreeRoot.innerHTML = "";
-    await buildFfmpegLevel(ffmpegTreeRoot, parts, myGeneration);
+    await buildFfmpegLevel(ffmpegTreeRoot, [], myGeneration, parts);
     ffmpegPathBar.setDisplay(parts);
+    const name = parts[parts.length - 1] || "selected";
+    await selectFfmpegFolder(parts, name);
   },
 });
 
@@ -2422,7 +2437,7 @@ ffmpegBrowseZone.addEventListener("click", async () => {
 
   const myGeneration = ++ffmpegTreeGeneration;
   ffmpegTreeRoot.innerHTML = "";
-  await buildFfmpegLevel(ffmpegTreeRoot, resolved.parts, myGeneration);
+  await buildFfmpegLevel(ffmpegTreeRoot, [], myGeneration, resolved.parts);
   ffmpegPathBar.setDisplay(resolved.parts);
 
   const name = resolved.parts[resolved.parts.length - 1] || "selected";
