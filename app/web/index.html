@@ -336,6 +336,13 @@
       <div class="smanim-divider" id="smanim-divider"></div>
 
       <div class="smanim-right" id="smanim-right">
+        <div class="path-bar">
+          <input type="text" class="path-bar-input" id="smanim-path-input" spellcheck="false">
+          <button type="button" class="path-bar-copy" id="smanim-path-copy" title="Copy path">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+        </div>
+        <div id="smanim-path-error" class="path-bar-error"></div>
         <div id="tree-root" class="tree-root"></div>
       </div>
 
@@ -411,6 +418,13 @@
       <div class="smanim-divider" id="archive-divider"></div>
 
       <div class="smanim-right" id="archive-right">
+        <div class="path-bar">
+          <input type="text" class="path-bar-input" id="archive-path-input" spellcheck="false">
+          <button type="button" class="path-bar-copy" id="archive-path-copy" title="Copy path">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+        </div>
+        <div id="archive-path-error" class="path-bar-error"></div>
         <div id="archive-tree-root" class="tree-root"></div>
       </div>
 
@@ -427,7 +441,8 @@
           Home
         </button>
 
-        <div class="next-note">Click "Use this folder" next to a folder in the tree that contains a numbered image sequence.</div>
+        <div class="next-note">Click "Use this folder" next to a folder in the tree that contains a numbered image sequence, or browse for one directly.</div>
+        <button id="ffmpeg-browse-button" class="small-button" type="button">Browse from Windows Explorer...</button>
 
         <div id="ffmpeg-selected-path" class="next-note"></div>
         <div id="ffmpeg-detected-info" class="next-note"></div>
@@ -488,6 +503,13 @@
       <div class="smanim-divider" id="ffmpeg-divider"></div>
 
       <div class="smanim-right" id="ffmpeg-right">
+        <div class="path-bar">
+          <input type="text" class="path-bar-input" id="ffmpeg-path-input" spellcheck="false">
+          <button type="button" class="path-bar-copy" id="ffmpeg-path-copy" title="Copy path">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+        </div>
+        <div id="ffmpeg-path-error" class="path-bar-error"></div>
         <div id="ffmpeg-tree-root" class="tree-root"></div>
       </div>
 

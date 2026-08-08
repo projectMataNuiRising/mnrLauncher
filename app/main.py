@@ -70,6 +70,36 @@ def get_users_folder():
     return os.path.join(root, "00-temp")
 
 
+def _path_to_relative_parts(absolute_path, base_root):
+    """
+    Converts an absolute path (typed into an address bar, pasted, or
+    picked via the native folder browser) into the relative path parts
+    the tree/browser tools already work with, relative to base_root.
+    Returns None if the path is outside base_root or doesn't exist.
+    Case-insensitive on Windows, since paths there are.
+    """
+    try:
+        abs_norm = os.path.normpath(os.path.abspath(absolute_path))
+        base_norm = os.path.normpath(os.path.abspath(base_root))
+    except Exception:
+        return None
+
+    if platform.system() == "Windows":
+        abs_cmp, base_cmp = abs_norm.lower(), base_norm.lower()
+    else:
+        abs_cmp, base_cmp = abs_norm, base_norm
+
+    if abs_cmp == base_cmp:
+        return []
+
+    prefix = base_cmp + os.sep
+    if not abs_cmp.startswith(prefix):
+        return None
+
+    rel = os.path.relpath(abs_norm, base_norm)
+    return [p for p in rel.split(os.sep) if p]
+
+
 def get_local_state_dir():
     """
     A per-machine folder for small local state (like 'last selected user').
@@ -1351,6 +1381,43 @@ class MnrApi:
         except Exception as e:
             _log(f"browse_files failed: {e}")
             return {"ok": False, "detail": str(e)}
+
+    def browse_folder(self):
+        """Opens a native folder picker and returns the chosen absolute path."""
+        try:
+            result = webview.windows[0].create_file_dialog(webview.FOLDER_DIALOG)
+            if not result:
+                _log("browse_folder: cancelled, nothing chosen")
+                return {"ok": True, "path": None}
+            _log(f"browse_folder: {result[0]} chosen")
+            return {"ok": True, "path": result[0]}
+        except Exception as e:
+            _log(f"browse_folder failed: {e}")
+            return {"ok": False, "detail": str(e)}
+
+    def resolve_path_to_parts(self, absolute_path, from_root=False):
+        """
+        Converts an absolute path, typed into an address bar, pasted,
+        or picked via browse_folder, into the relative path parts the
+        tree browsers use. Used by every folder browser's editable
+        path bar. Returns ok:False with a plain-language reason when
+        the path is outside the allowed root or doesn't exist, so the
+        UI can show why it was rejected rather than just silently
+        resetting.
+        """
+        root = get_pcloud_root()
+        base_root = root if from_root else os.path.join(root, "01-projects")
+
+        parts = _path_to_relative_parts(absolute_path, base_root)
+        if parts is None:
+            label = "the pCloud drive" if from_root else "01-projects"
+            return {"ok": False, "detail": f"That path is outside {label}"}
+
+        full = os.path.join(base_root, *parts) if parts else base_root
+        if not os.path.isdir(full):
+            return {"ok": False, "detail": "That folder does not exist"}
+
+        return {"ok": True, "parts": parts}
 
     def upload_layer_publish(self, payload):
         """

@@ -574,6 +574,7 @@ async function refreshTree() {
   const autoPath = currentAutoPath();
   const pendingMap = computePendingMap();
   await buildLevel(treeRoot, [], autoPath, pendingMap, myGeneration);
+  smanimPathBar.setDisplay(autoPath);
 }
 
 // Figures out exactly where every currently-selected (but not yet
@@ -1707,6 +1708,7 @@ async function refreshArchiveTree() {
   const overrideOn = archiveOverrideToggle.checked;
   const rootParts = overrideOn ? [] : (archiveProjectFilter.value ? [archiveProjectFilter.value] : []);
   await buildArchiveLevel(archiveTreeRoot, rootParts, myGeneration, overrideOn);
+  archivePathBar.setDisplay(rootParts);
 }
 
 // A folder can be archived only if it sits strictly inside a
@@ -2119,6 +2121,7 @@ async function initFfmpegScreen() {
   const myGeneration = ++ffmpegTreeGeneration;
   ffmpegTreeRoot.innerHTML = "";
   await buildFfmpegLevel(ffmpegTreeRoot, [], myGeneration);
+  ffmpegPathBar.setDisplay([]);
 }
 
 async function buildFfmpegLevel(container, pathParts, generation) {
@@ -2288,4 +2291,132 @@ ffmpegConvertButton.addEventListener("click", async () => {
       ffmpegConvertButton.disabled = false;
     }
   }, 500);
+});
+
+// ---------------------------------------------------------------
+// Shared address bar for every folder tree browser (smAnim, Archive,
+// Frames to MP4). Shows the current path as P:\..., copyable, and
+// editable, typing or pasting a path and hitting Enter navigates
+// there directly, as long as it stays within whatever that tool's
+// current locked prefix is. Outside that, it resets back to the
+// current path and shows why, rather than silently failing.
+// ---------------------------------------------------------------
+
+function createPathBar(inputEl, copyBtnEl, errorEl, config) {
+  let currentParts = [];
+
+  function setDisplay(parts) {
+    currentParts = parts;
+    inputEl.value = "P:\\" + parts.join("\\");
+    errorEl.textContent = "";
+  }
+
+  copyBtnEl.addEventListener("click", () => {
+    navigator.clipboard.writeText(inputEl.value).catch(() => {});
+  });
+
+  inputEl.addEventListener("keydown", async (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    inputEl.blur();
+
+    const typed = inputEl.value.trim();
+    const fromRoot = config.getFromRoot ? config.getFromRoot() : false;
+    const result = await window.pywebview.api.resolve_path_to_parts(typed, fromRoot);
+
+    if (!result.ok) {
+      inputEl.value = "P:\\" + currentParts.join("\\");
+      errorEl.textContent = result.detail;
+      return;
+    }
+
+    const lockedParts = config.getLockedParts ? config.getLockedParts() : [];
+    const matches = lockedParts.every(
+      (p, i) => (result.parts[i] || "").toLowerCase() === p.toLowerCase()
+    );
+    if (!matches) {
+      inputEl.value = "P:\\" + currentParts.join("\\");
+      errorEl.textContent = `Locked to P:\\${lockedParts.join("\\")}, can't navigate outside it`;
+      return;
+    }
+
+    errorEl.textContent = "";
+    config.onNavigate(result.parts);
+  });
+
+  return { setDisplay };
+}
+
+// --- smAnim tool ---
+const smanimPathInput = document.getElementById("smanim-path-input");
+const smanimPathCopy = document.getElementById("smanim-path-copy");
+const smanimPathError = document.getElementById("smanim-path-error");
+
+const smanimPathBar = createPathBar(smanimPathInput, smanimPathCopy, smanimPathError, {
+  getFromRoot: () => false,
+  getLockedParts: () => currentAutoPath(),
+  onNavigate: async (parts) => {
+    const myGeneration = ++treeRefreshGeneration;
+    treeRoot.innerHTML = "";
+    const pendingMap = computePendingMap();
+    await buildLevel(treeRoot, [], parts, pendingMap, myGeneration);
+    smanimPathBar.setDisplay(parts);
+  },
+});
+
+// --- Archive tool ---
+const archivePathInput = document.getElementById("archive-path-input");
+const archivePathCopy = document.getElementById("archive-path-copy");
+const archivePathError = document.getElementById("archive-path-error");
+
+const archivePathBar = createPathBar(archivePathInput, archivePathCopy, archivePathError, {
+  getFromRoot: () => archiveOverrideToggle.checked,
+  getLockedParts: () => [],
+  onNavigate: async (parts) => {
+    const myGeneration = ++archiveTreeGeneration;
+    archiveTreeRoot.innerHTML = "";
+    const overrideOn = archiveOverrideToggle.checked;
+    await buildArchiveLevel(archiveTreeRoot, parts, myGeneration, overrideOn);
+    archivePathBar.setDisplay(parts);
+  },
+});
+
+// --- Frames to MP4 tool ---
+const ffmpegPathInput = document.getElementById("ffmpeg-path-input");
+const ffmpegPathCopy = document.getElementById("ffmpeg-path-copy");
+const ffmpegPathError = document.getElementById("ffmpeg-path-error");
+const ffmpegBrowseButton = document.getElementById("ffmpeg-browse-button");
+
+const ffmpegPathBar = createPathBar(ffmpegPathInput, ffmpegPathCopy, ffmpegPathError, {
+  getFromRoot: () => false,
+  getLockedParts: () => [],
+  onNavigate: async (parts) => {
+    const myGeneration = ++ffmpegTreeGeneration;
+    ffmpegTreeRoot.innerHTML = "";
+    await buildFfmpegLevel(ffmpegTreeRoot, parts, myGeneration);
+    ffmpegPathBar.setDisplay(parts);
+  },
+});
+
+ffmpegBrowseButton.addEventListener("click", async () => {
+  const result = await window.pywebview.api.browse_folder();
+  if (!result.ok) {
+    addFfmpegStatusLine(`Could not open the folder browser: ${result.detail}`, "fail");
+    return;
+  }
+  if (!result.path) return; // cancelled
+
+  const resolved = await window.pywebview.api.resolve_path_to_parts(result.path, false);
+  if (!resolved.ok) {
+    ffmpegPathError.textContent = resolved.detail;
+    return;
+  }
+
+  const myGeneration = ++ffmpegTreeGeneration;
+  ffmpegTreeRoot.innerHTML = "";
+  await buildFfmpegLevel(ffmpegTreeRoot, resolved.parts, myGeneration);
+  ffmpegPathBar.setDisplay(resolved.parts);
+
+  const name = resolved.parts[resolved.parts.length - 1] || "selected";
+  await selectFfmpegFolder(resolved.parts, name);
 });

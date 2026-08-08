@@ -641,6 +641,60 @@ body {
 
 /* Folder tree view */
 
+.path-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.path-bar-input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  font-family: "Consolas", "Menlo", monospace;
+}
+
+.path-bar-input:disabled {
+  color: var(--muted);
+}
+
+.path-bar-copy {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.path-bar-copy svg {
+  width: 15px;
+  height: 15px;
+}
+
+.path-bar-copy:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.path-bar-error {
+  color: var(--red);
+  font-size: 11px;
+  margin-bottom: 6px;
+  min-height: 14px;
+}
+
 .tree-root {
   font-size: 13px;
 }
