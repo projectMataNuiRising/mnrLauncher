@@ -1,20 +1,25 @@
-name: Build Windows Installer
+name: Build Windows and Mac Installers
 
-# This runs automatically on GitHub's own Windows machines every time
-# code is pushed to main OR dev (only when bootstrap/ or this file
-# changes), or can be triggered manually from the Actions tab. It
-# compiles bootstrap/launcher.py into one MNR_Launcher.exe, using a
-# clean full Python install (not the stripped-down portable one
-# artists use), since PyInstaller needs the full standard library to
-# build reliably.
+# This runs automatically on GitHub's own Windows and Mac machines
+# every time code is pushed to main OR dev (only when bootstrap/ or
+# this file changes), or can be triggered manually from the Actions
+# tab. It compiles bootstrap/launcher.py into MNR_Launcher.exe
+# (Windows) and MNR_Launcher.app (Mac), using clean full Python
+# installs (not the stripped-down portable one artists use), since
+# PyInstaller needs the full standard library to build reliably.
 #
-# It also publishes a GitHub Release with that .exe attached, using
-# the run number as an auto-incrementing version. Builds from main are
-# tagged v<N> and become "Latest", real users' running apps check
-# that. Builds from dev are tagged dev-<N> and marked as a
-# pre-release, which means they never become "Latest" and can never
-# be picked up by a normal user, only by someone who has explicitly
-# switched on the Dev Exe toggle inside the app.
+# Windows gets the full self-updating shell (checks GitHub Releases,
+# downloads, swaps itself, relaunches), that mechanism only got solid
+# after several rounds of real, only-testable-live bugs, so it isn't
+# something to blind-ship for Mac with no way to verify it actually
+# works there. The Mac build's app CODE still auto-updates itself
+# normally (that part was always pure cross-platform file logic), the
+# shell itself just doesn't self-replace, a new Mac build means
+# manually handing out a fresh download for now, on purpose.
+#
+# Builds from main are tagged v<N> and become "Latest", real users'
+# running Windows apps check that. Builds from dev are tagged dev-<N>
+# and marked as a pre-release, never picked up by a normal user.
 
 on:
   push:
@@ -78,5 +83,62 @@ jobs:
           tag_name: dev-${{ github.run_number }}
           name: MNR Launcher Dev Build ${{ github.run_number }}
           files: dist/MNR_Launcher.exe
+          generate_release_notes: false
+          prerelease: true
+
+  build-mac:
+    # Runs after Windows finishes, so both platforms land in the same
+    # GitHub Release for a given build number instead of racing to
+    # create it at the same time.
+    needs: build-windows
+    runs-on: macos-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install pywebview psutil requests Pillow send2trash pyinstaller
+
+      - name: Stamp the build version
+        run: |
+          sed -i '' "s/0\.0\.0-dev/${{ github.run_number }}/" bootstrap/launcher.py
+
+      - name: Build the Mac app
+        run: |
+          pyinstaller --windowed --name MNR_Launcher --icon=bootstrap/assets/icon.icns bootstrap/launcher.py
+          # Ad-hoc self-sign, free, no Apple Developer account needed.
+          # Meaningfully reduces Gatekeeper's "app is damaged" false
+          # positive that unsigned PyInstaller Mac builds are prone to,
+          # though users will still need to right-click and choose
+          # Open the first time, same as the Windows SmartScreen prompt.
+          codesign --force --deep --sign - dist/MNR_Launcher.app
+          cd dist && zip -r MNR_Launcher-mac.zip MNR_Launcher.app
+
+      - name: Upload the build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MNR_Launcher-mac
+          path: dist/MNR_Launcher-mac.zip
+
+      - name: Publish to the GitHub Release (main branch)
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          files: dist/MNR_Launcher-mac.zip
+          generate_release_notes: false
+
+      - name: Publish to the GitHub Release (dev branch)
+        if: github.ref == 'refs/heads/dev'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dev-${{ github.run_number }}
+          files: dist/MNR_Launcher-mac.zip
           generate_release_notes: false
           prerelease: true

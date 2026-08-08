@@ -485,8 +485,17 @@ def main():
 
         # Only checks, never downloads. main.py's own UI shows a forced
         # "Update Now" gate if this is non-None, the actual download
-        # only happens once that button is clicked.
-        update_info = check_for_shell_update(dev_mode=dev_settings["dev_exe"], status_callback=log)
+        # only happens once that button is clicked. Windows only for
+        # now, the exe-swap-and-relaunch mechanism this depends on is
+        # Windows-specific (single-file exe, not an app bundle), and
+        # this whole thing only got solid after several rounds of
+        # real, only-testable-live bugs, not something to blind-ship
+        # for a platform with no way to verify it actually works.
+        # App code above still auto-updates everywhere regardless,
+        # that part was always pure cross-platform file logic.
+        update_info = None
+        if platform.system() == "Windows":
+            update_info = check_for_shell_update(dev_mode=dev_settings["dev_exe"], status_callback=log)
 
         os.environ["MNR_SHELL_VERSION"] = SHELL_VERSION
         os.environ["MNR_DEV_APP_CODE"] = "1" if dev_settings["dev_app_code"] else "0"
