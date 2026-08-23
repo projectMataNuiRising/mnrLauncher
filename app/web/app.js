@@ -2175,6 +2175,11 @@ function formatEta(seconds) {
   return `~${minutes}m ${secs}s remaining`;
 }
 
+// While a run is active, block leaving this screen entirely, since
+// walking away mid-archive is exactly what could leave things in a
+// half-finished state. Home, Refresh, and the user switcher all live
+// in the persistent topbar rather than this screen, so they need
+// locking too, not just the Back button here.
 
 archiveRunButton.addEventListener("click", async () => {
   archiveRunButton.disabled = true;
@@ -2198,6 +2203,487 @@ archiveRunButton.addEventListener("click", async () => {
 
   archiveRunButton.disabled = false;
 });
+
+// ---------------------------------------------------------------
+// Frames to MP4 tool. Browse to a folder containing a numbered image
+// sequence, pick frame rate / scale / bitrate, and run ffmpeg on a
+// background thread with live frame-based progress. Deliberately
+// simple: fixed to H.264 in an MP4 container, no cropping (source
+// aspect ratio is always kept), no full-system override, just enough
+// options to be useful.
+// ---------------------------------------------------------------
+
+const ffmpegBack = document.getElementById("ffmpeg-back");
+const ffmpegLeft = document.getElementById("ffmpeg-left");
+const ffmpegDivider = document.getElementById("ffmpeg-divider");
+const ffmpegRight = document.getElementById("ffmpeg-right");
+const ffmpegTreeRoot = document.getElementById("ffmpeg-tree-root");
+const ffmpegTile = document.getElementById("ffmpeg-tile");
+const ffmpegTileBadge = document.getElementById("ffmpeg-tile-badge");
+const ffmpegSelectedPath = document.getElementById("ffmpeg-selected-path");
+const ffmpegDetectedInfo = document.getElementById("ffmpeg-detected-info");
+const ffmpegFramerateSelect = document.getElementById("ffmpeg-framerate");
+const ffmpegFramerateCustom = document.getElementById("ffmpeg-framerate-custom");
+const ffmpegScaleSelect = document.getElementById("ffmpeg-scale");
+const ffmpegScaleCustom = document.getElementById("ffmpeg-scale-custom");
+const ffmpegScalePreview = document.getElementById("ffmpeg-scale-preview");
+const ffmpegBitrateInput = document.getElementById("ffmpeg-bitrate");
+const ffmpegOutputFolderInput = document.getElementById("ffmpeg-output-folder-input");
+const ffmpegOutputFolderCopy = document.getElementById("ffmpeg-output-folder-copy");
+const ffmpegOutputFolderError = document.getElementById("ffmpeg-output-folder-error");
+const ffmpegOutputName = document.getElementById("ffmpeg-output-name");
+const ffmpegConvertButton = document.getElementById("ffmpeg-convert-button");
+const ffmpegProgressWrap = document.getElementById("ffmpeg-progress-wrap");
+const ffmpegProgressBar = document.getElementById("ffmpeg-progress-bar");
+const ffmpegProgressPercent = document.getElementById("ffmpeg-progress-percent");
+const ffmpegProgressFrames = document.getElementById("ffmpeg-progress-frames");
+const ffmpegStatus = document.getElementById("ffmpeg-status");
+
+let ffmpegTreeGeneration = 0;
+let ffmpegSelected = null; // {pathParts, name, width, height, frameCount}
+let ffmpegOutputFolderParts = null;
+
+ffmpegBack.addEventListener("click", () => {
+  showScreen("home");
+});
+
+(function setupFfmpegDivider() {
+  let dragging = false;
+  ffmpegDivider.addEventListener("mousedown", () => {
+    dragging = true;
+    ffmpegDivider.classList.add("dragging");
+    document.body.style.userSelect = "none";
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const rect = ffmpegLeft.parentElement.getBoundingClientRect();
+    let leftPercent = ((e.clientX - rect.left) / rect.width) * 100;
+    leftPercent = Math.max(25, Math.min(80, leftPercent));
+    ffmpegLeft.style.flex = `0 0 ${leftPercent}%`;
+    ffmpegRight.style.flex = `1 1 ${100 - leftPercent}%`;
+  });
+  document.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    ffmpegDivider.classList.remove("dragging");
+    document.body.style.userSelect = "";
+  });
+})();
+
+async function refreshFfmpegTile() {
+  try {
+    const info = await window.pywebview.api.get_ffmpeg_info();
+    if (!info.supported) {
+      ffmpegTile.classList.add("hidden");
+    } else if (info.ok) {
+      ffmpegTile.classList.remove("hidden", "tile-disabled");
+      ffmpegTileBadge.textContent = `v${info.version}`;
+    } else {
+      ffmpegTile.classList.remove("hidden");
+      ffmpegTileBadge.textContent = "Not found";
+      ffmpegTile.classList.add("tile-disabled");
+    }
+  } catch (e) {
+    ffmpegTile.classList.remove("hidden");
+    ffmpegTileBadge.textContent = "Not found";
+    ffmpegTile.classList.add("tile-disabled");
+  }
+}
+
+async function initFfmpegScreen() {
+  ffmpegSelected = null;
+  ffmpegSelectedPath.textContent = "";
+  ffmpegDetectedInfo.textContent = "";
+  ffmpegScalePreview.textContent = "";
+  ffmpegStatus.innerHTML = "";
+  ffmpegOutputName.value = "";
+  ffmpegConvertButton.disabled = true;
+
+  const myGeneration = ++ffmpegTreeGeneration;
+  ffmpegTreeRoot.innerHTML = "";
+  await buildFfmpegLevel(ffmpegTreeRoot, [], myGeneration);
+  ffmpegPathBar.setDisplay([]);
+}
+
+async function buildFfmpegLevel(container, pathParts, generation, autoPath = []) {
+  const result = await window.pywebview.api.list_dir_entries(pathParts, false, true);
+  if (generation !== ffmpegTreeGeneration) return;
+
+  if (!result.ok) {
+    const msg = document.createElement("div");
+    msg.className = "tree-name tree-missing";
+    msg.textContent = pathParts.length === 0 ? "(could not read the pCloud drive)" : "(empty)";
+    container.appendChild(msg);
+    return;
+  }
+
+  for (const item of result.items) {
+    if (!item.is_dir) continue; // only folders matter for this tool
+    const nextParts = pathParts.concat(item.name);
+    const depth = pathParts.length;
+    const { row, toggle } = makeRow(item.name, true, depth);
+    container.appendChild(row);
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "tree-action-button";
+    btn.textContent = "Use this folder";
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      selectFfmpegFolder(nextParts, item.name);
+    });
+    row.appendChild(btn);
+
+    let childrenContainer = null;
+    let expanded = false;
+
+    async function doExpand() {
+      if (!childrenContainer) {
+        childrenContainer = document.createElement("div");
+        childrenContainer.className = "tree-children";
+        row.insertAdjacentElement("afterend", childrenContainer);
+      }
+      expanded = !expanded;
+      toggle.textContent = expanded ? "\u25bc" : "\u25b6";
+      childrenContainer.style.display = expanded ? "block" : "none";
+      if (expanded && childrenContainer.childElementCount === 0) {
+        await buildFfmpegLevel(childrenContainer, nextParts, generation, autoPath);
+      }
+    }
+
+    row.addEventListener("click", () => doExpand());
+
+    const shouldAutoExpand = pathParts.length < autoPath.length && item.name === autoPath[pathParts.length];
+    if (shouldAutoExpand) {
+      await doExpand();
+    }
+  }
+}
+
+async function selectFfmpegFolder(pathParts, name) {
+  ffmpegSelectedPath.textContent = `Selected: ${pathParts.join("/")}`;
+  ffmpegDetectedInfo.textContent = "Reading frame sequence...";
+  ffmpegConvertButton.disabled = true;
+  ffmpegConvertButton.classList.remove("ready");
+  ffmpegSelected = null;
+
+  const info = await window.pywebview.api.inspect_frame_sequence(pathParts, true);
+  if (!info.ok) {
+    ffmpegDetectedInfo.textContent = info.detail;
+    return;
+  }
+
+  ffmpegSelected = {
+    pathParts,
+    name,
+    width: info.width,
+    height: info.height,
+    frameCount: info.frame_count,
+  };
+
+  let text = `${info.frame_count} frames (${info.start_frame}-${info.end_frame}), ${info.width}x${info.height}`;
+  if (info.has_gaps) {
+    text += " \u2014 warning: gaps detected in the frame numbers";
+  }
+  ffmpegDetectedInfo.textContent = text;
+
+  // Defaults to the sequence's own name with frame numbers and
+  // periods already stripped off, still fully editable.
+  ffmpegOutputName.value = info.prefix;
+
+  // Defaults to the same folder the sequence lives in, shown here so
+  // it's visible the moment a folder is picked, still editable.
+  ffmpegOutputFolderParts = pathParts.slice(0, -1);
+  ffmpegOutputFolderPathBar.setDisplay(ffmpegOutputFolderParts);
+
+  updateFfmpegScalePreview();
+  ffmpegConvertButton.disabled = false;
+  ffmpegConvertButton.classList.add("ready");
+}
+
+function getFfmpegFramerate() {
+  if (ffmpegFramerateSelect.value === "custom") {
+    return parseFloat(ffmpegFramerateCustom.value) || 12;
+  }
+  return parseFloat(ffmpegFramerateSelect.value);
+}
+
+function getFfmpegScalePercent() {
+  if (ffmpegScaleSelect.value === "custom") {
+    return parseFloat(ffmpegScaleCustom.value) || 100;
+  }
+  return parseFloat(ffmpegScaleSelect.value);
+}
+
+function updateFfmpegScalePreview() {
+  if (!ffmpegSelected) {
+    ffmpegScalePreview.textContent = "";
+    return;
+  }
+  const scale = getFfmpegScalePercent();
+  const outW = Math.round(ffmpegSelected.width * (scale / 100));
+  const outH = Math.round(ffmpegSelected.height * (scale / 100));
+  ffmpegScalePreview.textContent = `Output size: ${outW}x${outH}`;
+}
+
+ffmpegFramerateSelect.addEventListener("change", () => {
+  ffmpegFramerateCustom.classList.toggle("hidden", ffmpegFramerateSelect.value !== "custom");
+});
+
+ffmpegScaleSelect.addEventListener("change", () => {
+  ffmpegScaleCustom.classList.toggle("hidden", ffmpegScaleSelect.value !== "custom");
+  updateFfmpegScalePreview();
+});
+
+ffmpegScaleCustom.addEventListener("input", updateFfmpegScalePreview);
+
+function addFfmpegStatusLine(text, kind) {
+  const line = document.createElement("div");
+  line.textContent = text;
+  line.className = kind === "ok" ? "boot-line-ok" : kind === "fail" ? "boot-line-fail" : "boot-line-info";
+  ffmpegStatus.appendChild(line);
+}
+
+ffmpegConvertButton.addEventListener("click", async () => {
+  if (!ffmpegSelected) return;
+
+  ffmpegConvertButton.disabled = true;
+  ffmpegStatus.innerHTML = "";
+  ffmpegProgressWrap.classList.remove("hidden");
+  ffmpegProgressBar.style.width = "0%";
+  ffmpegProgressPercent.textContent = "0%";
+  ffmpegProgressFrames.textContent = "";
+
+  const framerate = getFfmpegFramerate();
+  const scale = getFfmpegScalePercent();
+  const bitrate = parseInt(ffmpegBitrateInput.value, 10) || 8000;
+  const outputName = ffmpegOutputName.value.trim() || ffmpegSelected.name;
+  const outputFolder = ffmpegOutputFolderParts || ffmpegSelected.pathParts.slice(0, -1);
+  const openWhenDone = document.getElementById("ffmpeg-open-when-done").checked;
+
+  const startResult = await window.pywebview.api.run_ffmpeg_convert(
+    ffmpegSelected.pathParts, framerate, bitrate, scale, outputName, outputFolder, true
+  );
+
+  if (!startResult.ok) {
+    ffmpegProgressWrap.classList.add("hidden");
+    addFfmpegStatusLine(`Could not start: ${startResult.detail}`, "fail");
+    ffmpegConvertButton.disabled = false;
+    return;
+  }
+
+  const pollInterval = setInterval(async () => {
+    const progress = await window.pywebview.api.get_ffmpeg_progress();
+    ffmpegProgressBar.style.width = `${progress.percent}%`;
+    ffmpegProgressPercent.textContent = `${progress.percent}%`;
+    ffmpegProgressFrames.textContent = `frame ${progress.current_frame} / ${progress.total_frames}`;
+
+    if (progress.done) {
+      clearInterval(pollInterval);
+      ffmpegProgressWrap.classList.add("hidden");
+      addFfmpegStatusLine(
+        progress.ok ? `[OK] Created ${progress.detail}` : `[FAIL] ${progress.detail}`,
+        progress.ok ? "ok" : "fail"
+      );
+      ffmpegConvertButton.disabled = false;
+
+      if (progress.ok && openWhenDone) {
+        const outputParts = outputFolder.concat(progress.detail);
+        await window.pywebview.api.open_path(outputParts, true);
+      }
+    }
+  }, 500);
+});
+
+// ---------------------------------------------------------------
+// Shared address bar for every folder tree browser (smAnim, Archive,
+// Frames to MP4). Shows the current path as P:\..., copyable, and
+// editable, typing or pasting a path and hitting Enter navigates
+// there directly, as long as it stays within whatever that tool's
+// current locked prefix is. Outside that, it resets back to the
+// current path and shows why, rather than silently failing.
+// ---------------------------------------------------------------
+
+function createPathBar(inputEl, copyBtnEl, errorEl, config) {
+  let currentParts = [];
+
+  function setDisplay(parts) {
+    currentParts = parts;
+    inputEl.value = "P:\\" + parts.join("\\");
+    errorEl.textContent = "";
+  }
+
+  copyBtnEl.addEventListener("click", () => {
+    navigator.clipboard.writeText(inputEl.value).catch(() => {});
+  });
+
+  inputEl.addEventListener("keydown", async (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    inputEl.blur();
+
+    const typed = inputEl.value.trim();
+    const fromRoot = config.getFromRoot ? config.getFromRoot() : false;
+    const result = await window.pywebview.api.resolve_path_to_parts(typed, fromRoot);
+
+    if (!result.ok) {
+      inputEl.value = "P:\\" + currentParts.join("\\");
+      errorEl.textContent = result.detail;
+      return;
+    }
+
+    const lockedParts = config.getLockedParts ? config.getLockedParts() : [];
+    const matches = lockedParts.every(
+      (p, i) => (result.parts[i] || "").toLowerCase() === p.toLowerCase()
+    );
+    if (!matches) {
+      inputEl.value = "P:\\" + currentParts.join("\\");
+      errorEl.textContent = `Locked to P:\\${lockedParts.join("\\")}, can't navigate outside it`;
+      return;
+    }
+
+    errorEl.textContent = "";
+    config.onNavigate(result.parts);
+  });
+
+  return { setDisplay };
+}
+
+// --- smAnim tool ---
+const smanimPathInput = document.getElementById("smanim-path-input");
+const smanimPathCopy = document.getElementById("smanim-path-copy");
+const smanimPathError = document.getElementById("smanim-path-error");
+
+const smanimPathBar = createPathBar(smanimPathInput, smanimPathCopy, smanimPathError, {
+  getFromRoot: () => false,
+  getLockedParts: () => currentAutoPath(),
+  onNavigate: async (parts) => {
+    const myGeneration = ++treeRefreshGeneration;
+    treeRoot.innerHTML = "";
+    const pendingMap = computePendingMap();
+    await buildLevel(treeRoot, [], parts, pendingMap, myGeneration);
+    smanimPathBar.setDisplay(parts);
+  },
+});
+
+// --- Archive tool ---
+const archivePathInput = document.getElementById("archive-path-input");
+const archivePathCopy = document.getElementById("archive-path-copy");
+const archivePathError = document.getElementById("archive-path-error");
+
+const archivePathBar = createPathBar(archivePathInput, archivePathCopy, archivePathError, {
+  getFromRoot: () => archiveOverrideToggle.checked,
+  getLockedParts: () => [],
+  onNavigate: async (parts) => {
+    const myGeneration = ++archiveTreeGeneration;
+    archiveTreeRoot.innerHTML = "";
+    const overrideOn = archiveOverrideToggle.checked;
+    await buildArchiveLevel(archiveTreeRoot, [], myGeneration, overrideOn, parts);
+    archivePathBar.setDisplay(parts);
+  },
+});
+
+// --- Frames to MP4 tool ---
+const ffmpegPathInput = document.getElementById("ffmpeg-path-input");
+const ffmpegPathCopy = document.getElementById("ffmpeg-path-copy");
+const ffmpegPathError = document.getElementById("ffmpeg-path-error");
+const ffmpegBrowseZone = document.getElementById("ffmpeg-browse-zone");
+
+const ffmpegPathBar = createPathBar(ffmpegPathInput, ffmpegPathCopy, ffmpegPathError, {
+  getFromRoot: () => true,
+  getLockedParts: () => [],
+  onNavigate: async (parts) => {
+    const myGeneration = ++ffmpegTreeGeneration;
+    ffmpegTreeRoot.innerHTML = "";
+    await buildFfmpegLevel(ffmpegTreeRoot, [], myGeneration, parts);
+    ffmpegPathBar.setDisplay(parts);
+    const name = parts[parts.length - 1] || "selected";
+    await selectFfmpegFolder(parts, name);
+  },
+});
+
+const ffmpegOutputFolderPathBar = createPathBar(
+  ffmpegOutputFolderInput, ffmpegOutputFolderCopy, ffmpegOutputFolderError,
+  {
+    getFromRoot: () => true,
+    getLockedParts: () => [],
+    onNavigate: (parts) => {
+      ffmpegOutputFolderParts = parts;
+      ffmpegOutputFolderPathBar.setDisplay(parts);
+    },
+  }
+);
+
+async function useFfmpegPath(absolutePath) {
+  const resolved = await window.pywebview.api.resolve_path_to_parts(absolutePath, true);
+  if (!resolved.ok) {
+    ffmpegPathError.textContent = resolved.detail;
+    return;
+  }
+
+  const myGeneration = ++ffmpegTreeGeneration;
+  ffmpegTreeRoot.innerHTML = "";
+  await buildFfmpegLevel(ffmpegTreeRoot, [], myGeneration, resolved.parts);
+  ffmpegPathBar.setDisplay(resolved.parts);
+
+  const name = resolved.parts[resolved.parts.length - 1] || "selected";
+  await selectFfmpegFolder(resolved.parts, name);
+}
+
+ffmpegBrowseZone.addEventListener("click", async () => {
+  const result = await window.pywebview.api.browse_folder();
+  if (!result.ok) {
+    addFfmpegStatusLine(`Could not open the folder browser: ${result.detail}`, "fail");
+    return;
+  }
+  if (!result.path) return; // cancelled
+  await useFfmpegPath(result.path);
+});
+
+// Dropping a frame file works as well as dropping the folder itself,
+// resolve_path_to_parts rejects a file, so fall back to its folder.
+registerDropTarget(ffmpegBrowseZone, async (paths) => {
+  const dropped = paths[0];
+  if (!dropped) return;
+  const resolved = await window.pywebview.api.resolve_path_to_parts(dropped, true);
+  if (resolved.ok) {
+    await useFfmpegPath(dropped);
+  } else {
+    const parentFolder = dropped.replace(/[\\/][^\\/]*$/, "");
+    await useFfmpegPath(parentFolder);
+  }
+});
+
+// ---------------------------------------------------------------
+// Connect Software.
+//
+// Software the artist already has installed locally, that we attach
+// our own plugin to. Three states per tile:
+//   not detected  -> yellow, clicking opens a manual exe picker
+//   detected      -> green, clicking opens a version picker
+//   connected     -> moves up into the Launch grid with a chain badge
+//
+// The catalog lives in Python, this side renders whatever it is told
+// about, so adding another piece of software later needs no changes
+// here.
+// ---------------------------------------------------------------
+
+const launchGrid = document.getElementById("launch-grid");
+const connectGrid = document.getElementById("connect-grid");
+const popupBackdrop = document.getElementById("popup-backdrop");
+const versionMenu = document.getElementById("version-menu");
+const versionMenuTitle = document.getElementById("version-menu-title");
+const versionMenuItems = document.getElementById("version-menu-items");
+const connectionMenu = document.getElementById("connection-menu");
+const connectionMenuTitle = document.getElementById("connection-menu-title");
+const connectionMenuProblem = document.getElementById("connection-menu-problem");
+const connectionMenuItems = document.getElementById("connection-menu-items");
+
+// Icons are per software id so the same artwork is used by both the
+// Connect Software tile and the Launch tile it turns into.
+const SOFTWARE_ICONS = {
+  after_effects: "https://www.adobe.com/cc-shared/assets/img/product-icons/svg/after-effects-40.svg",
+};
 
 // Demo tiles use an inline shape rather than a remote icon, they only
 // exist to preview the tile states while Debug is open.
