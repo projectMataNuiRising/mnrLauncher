@@ -504,6 +504,142 @@ body {
 
 .tile-label { font-size: 14px; font-weight: 500; text-align: center; padding: 0 8px; }
 
+/* ---------------- Connect Software ---------------- */
+
+/* The tile needs to be a positioning context so the chain badge can
+   sit in its top right corner. */
+.tile-connect,
+.tile-connected {
+  position: relative;
+}
+
+.tile-detected {
+  border-color: var(--green);
+  background: var(--green-soft);
+}
+
+.tile-detected:hover {
+  border-color: var(--green);
+  background: #24382d;
+}
+
+.tile-undetected {
+  border-color: var(--yellow);
+  background: var(--yellow-soft);
+}
+
+.tile-undetected:hover {
+  border-color: var(--yellow);
+  background: #3d3520;
+}
+
+.tile-badge-detected { color: var(--green); }
+.tile-badge-undetected { color: var(--yellow); }
+
+.tile-chain {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
+.tile-chain svg { width: 15px; height: 15px; }
+
+.tile-chain-ok { color: var(--green); }
+.tile-chain-problem { color: var(--red); }
+
+.tile-chain:hover {
+  background: var(--panel);
+  border-color: currentColor;
+}
+
+/* ---------------- Popup menus ---------------- */
+
+.popup-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 9, 11, 0.45);
+  z-index: 400;
+}
+
+.popup-backdrop.hidden { display: none; }
+
+.popup-menu {
+  position: fixed;
+  z-index: 401;
+  min-width: 230px;
+  max-width: 320px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  padding: 6px;
+}
+
+.popup-menu.hidden { display: none; }
+
+.popup-menu-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 6px 10px 8px 10px;
+}
+
+.popup-menu-problem {
+  font-size: 11px;
+  color: var(--red);
+  background: var(--red-soft);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  margin: 0 4px 6px 4px;
+  line-height: 1.4;
+}
+
+.popup-menu-problem.hidden { display: none; }
+
+.popup-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.popup-menu-item:hover { background: var(--panel-alt); }
+
+.popup-menu-item-sub {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.popup-menu-item-danger { color: var(--red); }
+.popup-menu-item-danger:hover { background: var(--red-soft); }
+
+.popup-menu-separator {
+  height: 1px;
+  background: var(--border);
+  margin: 6px 4px;
+}
+
 .tile-disabled {
   opacity: 0.45;
   cursor: not-allowed;

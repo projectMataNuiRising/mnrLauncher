@@ -317,6 +317,7 @@ async function runBoot() {
   refreshBlenderTile();
   refreshRawtherapeeTile();
   refreshFfmpegTile();
+  refreshSoftwareSection();
 
   const savedUser = await window.pywebview.api.get_saved_user();
   if (savedUser && allUsers.includes(savedUser)) {
@@ -2465,3 +2466,329 @@ ffmpegBrowseZone.addEventListener("click", async () => {
   const name = resolved.parts[resolved.parts.length - 1] || "selected";
   await selectFfmpegFolder(resolved.parts, name);
 });
+
+// ---------------------------------------------------------------
+// Connect Software.
+//
+// Software the artist already has installed locally, that we attach
+// our own plugin to. Three states per tile:
+//   not detected  -> yellow, clicking opens a manual exe picker
+//   detected      -> green, clicking opens a version picker
+//   connected     -> moves up into the Launch grid with a chain badge
+//
+// The catalog lives in Python, this side renders whatever it is told
+// about, so adding another piece of software later needs no changes
+// here.
+// ---------------------------------------------------------------
+
+const launchGrid = document.getElementById("launch-grid");
+const connectGrid = document.getElementById("connect-grid");
+const popupBackdrop = document.getElementById("popup-backdrop");
+const versionMenu = document.getElementById("version-menu");
+const versionMenuTitle = document.getElementById("version-menu-title");
+const versionMenuItems = document.getElementById("version-menu-items");
+const connectionMenu = document.getElementById("connection-menu");
+const connectionMenuTitle = document.getElementById("connection-menu-title");
+const connectionMenuProblem = document.getElementById("connection-menu-problem");
+const connectionMenuItems = document.getElementById("connection-menu-items");
+
+// Icons are per software id so the same artwork is used by both the
+// Connect Software tile and the Launch tile it turns into.
+const SOFTWARE_ICONS = {
+  after_effects: "https://www.adobe.com/cc-shared/assets/img/product-icons/svg/after-effects-40.svg",
+};
+
+const CHAIN_OK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>';
+const CHAIN_BROKEN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 0 1 0 10h-2"/><path d="M8 12h3"/><path d="M13 12h3"/><path d="M3 3l18 18"/></svg>';
+
+let softwareCatalog = {};   // software_id -> {label, detected, installs}
+let softwareConnections = {}; // key -> connection record
+
+function closeAllPopups() {
+  popupBackdrop.classList.add("hidden");
+  versionMenu.classList.add("hidden");
+  connectionMenu.classList.add("hidden");
+}
+
+popupBackdrop.addEventListener("click", closeAllPopups);
+
+// Anchors a popup near whatever was clicked, then nudges it back
+// inside the window if it would run off the bottom or right edge.
+function openPopupNear(menuEl, anchorEl) {
+  popupBackdrop.classList.remove("hidden");
+  menuEl.classList.remove("hidden");
+
+  const anchor = anchorEl.getBoundingClientRect();
+  const menu = menuEl.getBoundingClientRect();
+  const margin = 8;
+
+  let left = anchor.left;
+  let top = anchor.bottom + 4;
+
+  if (left + menu.width + margin > window.innerWidth) {
+    left = window.innerWidth - menu.width - margin;
+  }
+  if (top + menu.height + margin > window.innerHeight) {
+    top = anchor.top - menu.height - 4;
+  }
+
+  menuEl.style.left = `${Math.max(margin, left)}px`;
+  menuEl.style.top = `${Math.max(margin, top)}px`;
+}
+
+function makeMenuItem(label, subLabel, onClick, danger) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = danger ? "popup-menu-item popup-menu-item-danger" : "popup-menu-item";
+  btn.textContent = label;
+  if (subLabel) {
+    const sub = document.createElement("span");
+    sub.className = "popup-menu-item-sub";
+    sub.textContent = subLabel;
+    btn.appendChild(sub);
+  }
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+async function refreshSoftwareSection() {
+  try {
+    const [scan, conns] = await Promise.all([
+      window.pywebview.api.scan_installed_software(),
+      window.pywebview.api.get_software_connections(),
+    ]);
+    softwareCatalog = scan.ok ? scan.software : {};
+    softwareConnections = conns.ok ? conns.connections : {};
+  } catch (e) {
+    softwareCatalog = {};
+    softwareConnections = {};
+  }
+  renderConnectTiles();
+  renderConnectedTiles();
+}
+
+function renderConnectTiles() {
+  connectGrid.innerHTML = "";
+
+  Object.keys(softwareCatalog).forEach(softwareId => {
+    const info = softwareCatalog[softwareId];
+
+    // Versions already connected are dropped from the picker, they
+    // live in the Launch grid now. If every detected version is
+    // connected, the tile still shows so another copy can be added
+    // manually.
+    const connectedVersions = Object.values(softwareConnections)
+      .filter(c => c.software_id === softwareId)
+      .map(c => c.version);
+    const available = info.installs.filter(i => !connectedVersions.includes(i.version));
+
+    const tile = document.createElement("button");
+    tile.type = "button";
+    tile.className = "tile tile-connect " + (info.detected ? "tile-detected" : "tile-undetected");
+
+    const iconWrap = document.createElement("span");
+    iconWrap.className = "tile-icon";
+    const iconUrl = SOFTWARE_ICONS[softwareId];
+    if (iconUrl) {
+      const img = document.createElement("img");
+      img.src = iconUrl;
+      img.alt = info.label;
+      iconWrap.appendChild(img);
+    }
+    tile.appendChild(iconWrap);
+
+    const label = document.createElement("span");
+    label.className = "tile-label";
+    label.textContent = info.label;
+    tile.appendChild(label);
+
+    const badge = document.createElement("span");
+    badge.className = "tile-badge " + (info.detected ? "tile-badge-detected" : "tile-badge-undetected");
+    badge.textContent = info.detected ? "Connect Software" : "Not Detected";
+    tile.appendChild(badge);
+
+    tile.addEventListener("click", () => {
+      if (info.detected && available.length > 0) {
+        openVersionMenu(softwareId, info, available, tile);
+      } else {
+        // Nothing detected (or everything already connected), so go
+        // straight to the manual picker rather than showing a menu
+        // with a single option in it.
+        pickSoftwareManually(softwareId);
+      }
+    });
+
+    connectGrid.appendChild(tile);
+  });
+}
+
+function openVersionMenu(softwareId, info, available, anchorEl) {
+  closeAllPopups();
+  versionMenuTitle.textContent = `${info.label} versions`;
+  versionMenuItems.innerHTML = "";
+
+  available.forEach(install => {
+    versionMenuItems.appendChild(
+      makeMenuItem(install.version, install.install_dir, async () => {
+        closeAllPopups();
+        await doConnect(softwareId, install);
+      })
+    );
+  });
+
+  const sep = document.createElement("div");
+  sep.className = "popup-menu-separator";
+  versionMenuItems.appendChild(sep);
+
+  versionMenuItems.appendChild(
+    makeMenuItem("Choose manually...", "Point at the program file yourself", async () => {
+      closeAllPopups();
+      await pickSoftwareManually(softwareId);
+    })
+  );
+
+  openPopupNear(versionMenu, anchorEl);
+}
+
+async function pickSoftwareManually(softwareId) {
+  const result = await window.pywebview.api.browse_for_software_exe(softwareId);
+  if (!result.ok) {
+    showToast(result.detail, 5000);
+    return;
+  }
+  if (result.cancelled) return;
+  await doConnect(softwareId, result.install);
+}
+
+async function doConnect(softwareId, install) {
+  const result = await window.pywebview.api.connect_software(softwareId, install);
+  if (!result.ok) {
+    showToast(result.detail, 5000);
+    return;
+  }
+  await refreshSoftwareSection();
+  showToast("Connected", 2500);
+}
+
+function renderConnectedTiles() {
+  // Remove any previously rendered connected tiles, the static Launch
+  // tiles are left alone.
+  launchGrid.querySelectorAll(".tile-connected").forEach(el => el.remove());
+
+  Object.keys(softwareConnections).forEach(key => {
+    const record = softwareConnections[key];
+
+    const tile = document.createElement("button");
+    tile.type = "button";
+    tile.className = "tile tile-connected";
+
+    const iconWrap = document.createElement("span");
+    iconWrap.className = "tile-icon";
+    const iconUrl = SOFTWARE_ICONS[record.software_id];
+    if (iconUrl) {
+      const img = document.createElement("img");
+      img.src = iconUrl;
+      img.alt = record.label;
+      iconWrap.appendChild(img);
+    }
+    tile.appendChild(iconWrap);
+
+    const label = document.createElement("span");
+    label.className = "tile-label";
+    label.textContent = record.label;
+    tile.appendChild(label);
+
+    const badge = document.createElement("span");
+    badge.className = "tile-badge";
+    badge.textContent = record.version;
+    tile.appendChild(badge);
+
+    const chain = document.createElement("span");
+    chain.className = "tile-chain " + (record.healthy ? "tile-chain-ok" : "tile-chain-problem");
+    chain.innerHTML = record.healthy ? CHAIN_OK_SVG : CHAIN_BROKEN_SVG;
+    chain.title = record.healthy ? "Connection healthy" : record.problem;
+    chain.addEventListener("click", (e) => {
+      e.stopPropagation(); // do not also launch the software
+      openConnectionMenu(key, record, chain);
+    });
+    tile.appendChild(chain);
+
+    tile.addEventListener("click", async () => {
+      const result = await window.pywebview.api.launch_connected_software(key);
+      if (!result.ok) {
+        showToast(result.detail, 5000);
+        await refreshSoftwareSection(); // reflect the now-known problem
+      }
+    });
+
+    launchGrid.appendChild(tile);
+  });
+}
+
+function openConnectionMenu(key, record, anchorEl) {
+  closeAllPopups();
+  connectionMenuTitle.textContent = `${record.label} ${record.version}`;
+  connectionMenuItems.innerHTML = "";
+
+  if (record.healthy) {
+    connectionMenuProblem.classList.add("hidden");
+  } else {
+    connectionMenuProblem.textContent = record.problem;
+    connectionMenuProblem.classList.remove("hidden");
+  }
+
+  // Repair is offered first when something is actually wrong, since
+  // that is what the artist opened this menu to deal with.
+  if (!record.healthy) {
+    connectionMenuItems.appendChild(
+      makeMenuItem("Repair connection", "Look for this software again", async () => {
+        closeAllPopups();
+        const result = await window.pywebview.api.repair_software_connection(key);
+        if (result.ok) {
+          showToast(`Repaired, now pointing at ${result.version}`, 3500);
+        } else {
+          showToast(result.detail, 5000);
+        }
+        await refreshSoftwareSection();
+      })
+    );
+  }
+
+  connectionMenuItems.appendChild(
+    makeMenuItem("Open install folder", record.install_dir, async () => {
+      closeAllPopups();
+      const result = await window.pywebview.api.open_connection_folder(key);
+      if (!result.ok) showToast(result.detail, 5000);
+    })
+  );
+
+  connectionMenuItems.appendChild(
+    makeMenuItem("Reconnect to a different version", "Pick another install", async () => {
+      closeAllPopups();
+      await pickSoftwareManually(record.software_id);
+    })
+  );
+
+  const sep = document.createElement("div");
+  sep.className = "popup-menu-separator";
+  connectionMenuItems.appendChild(sep);
+
+  connectionMenuItems.appendChild(
+    makeMenuItem("Remove connection", "Removes this tile", async () => {
+      closeAllPopups();
+      const confirmed = confirm(
+        `Remove the ${record.label} ${record.version} connection?\n\nThe tile will disappear and it will show up under Connect Software again. ${record.label} itself is not touched.`
+      );
+      if (!confirmed) return;
+      const result = await window.pywebview.api.disconnect_software(key);
+      if (!result.ok) {
+        showToast(result.detail, 5000);
+        return;
+      }
+      await refreshSoftwareSection();
+      showToast("Connection removed", 2500);
+    }, true)
+  );
+
+  openPopupNear(connectionMenu, anchorEl);
+}

@@ -71,6 +71,25 @@
   <!-- Brief in-app notice, e.g. "Launching Blender..." -->
   <div id="toast" class="toast hidden"></div>
 
+  <!-- Shared popup layer for the Connect Software menus. One backdrop
+       closes whichever menu is open, so they can never both show. -->
+  <div id="popup-backdrop" class="popup-backdrop hidden"></div>
+
+  <!-- Version picker, shown when a tile in Connect Software is clicked.
+       Lists every detected version plus a manual pick option. -->
+  <div id="version-menu" class="popup-menu hidden">
+    <div class="popup-menu-title" id="version-menu-title">Select a version</div>
+    <div id="version-menu-items"></div>
+  </div>
+
+  <!-- Connection menu, shown when the chain icon on a connected tile
+       is clicked. Contents adapt to whether the connection is healthy. -->
+  <div id="connection-menu" class="popup-menu hidden">
+    <div class="popup-menu-title" id="connection-menu-title">Connection</div>
+    <div id="connection-menu-problem" class="popup-menu-problem hidden"></div>
+    <div id="connection-menu-items"></div>
+  </div>
+
   <!-- Persistent Blender launch notice, since a first-time launch can
        take a long time while pCloud downloads the build -->
   <div id="blender-notice" class="blender-notice hidden">
@@ -157,7 +176,7 @@
     </div>
     <div class="tile-section">
       <div class="tile-section-label">Launch</div>
-      <div class="tile-grid">
+      <div class="tile-grid" id="launch-grid">
         <button class="tile" id="blender-tile" data-tool="blender">
           <span class="tile-icon">
             <img src="https://icons.duckduckgo.com/ip3/blender.org.ico" alt="Blender">
@@ -184,7 +203,13 @@
           </span>
           <span class="tile-label">Documentation</span>
         </button>
+        <!-- Tiles for connected software get appended here, so they sit
+             alongside the other Launch tiles rather than in their own row. -->
       </div>
+    </div>
+    <div class="tile-section">
+      <div class="tile-section-label">Connect Software</div>
+      <div class="tile-grid" id="connect-grid"></div>
     </div>
     <div class="tile-section">
       <div class="tile-section-label">Tools</div>

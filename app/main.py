@@ -358,6 +358,141 @@ def _extract_ffmpeg_version(ff_version_dir):
 
 
 # ------------------------------------------------------------
+# Connect Software.
+#
+# This is for software the artist already has installed on their own
+# machine, that we then attach our own plugin/extension to. Different
+# from the Launch tiles above, those run portable builds straight off
+# pCloud and never touch the local machine.
+#
+# The scan is deliberately shallow and cheap: one directory listing
+# per known install root, then a single file existence check per hit.
+# No registry walking, no recursive searching, no subprocess calls.
+# This runs during boot, so it must never be something an artist
+# notices, correctness beyond the common case is handled by letting
+# them point at the exe manually instead.
+#
+# To add another piece of software later, add an entry to
+# _SOFTWARE_CATALOG, nothing else in the scan needs to change.
+# ------------------------------------------------------------
+
+_SOFTWARE_CATALOG = {
+    "after_effects": {
+        "label": "After Effects",
+        # Folders named like "Adobe After Effects 2024" live directly
+        # under these roots, with the exe at a fixed subpath inside.
+        "install_roots": [
+            r"C:\Program Files\Adobe",
+            r"C:\Program Files (x86)\Adobe",
+        ],
+        "folder_prefix": "Adobe After Effects",
+        "exe_subpath": os.path.join("Support Files", "AfterFX.exe"),
+        "exe_name": "AfterFX.exe",
+    },
+}
+
+
+def _version_from_folder_name(folder_name, prefix):
+    """
+    "Adobe After Effects 2024" -> "2024", "Adobe After Effects CC 2019"
+    -> "CC 2019". Whatever trails the known prefix is the version label
+    Adobe itself uses, so it is what the artist will recognize.
+    """
+    trimmed = folder_name[len(prefix):].strip()
+    return trimmed or "?"
+
+
+def _scan_one_software(software_id):
+    """
+    Returns a list of {version, exe_path, install_dir} for every
+    install found, newest-looking first. Empty list means not detected,
+    which is a normal outcome, not an error.
+    """
+    spec = _SOFTWARE_CATALOG.get(software_id)
+    if not spec or platform.system() != "Windows":
+        return []
+
+    found = []
+    seen_exes = set()
+
+    for root in spec["install_roots"]:
+        entries = _safe_listdir(root)
+        if not entries:
+            continue
+        for name in entries:
+            if not name.startswith(spec["folder_prefix"]):
+                continue
+            install_dir = os.path.join(root, name)
+            if not os.path.isdir(install_dir):
+                continue
+            exe_path = os.path.join(install_dir, spec["exe_subpath"])
+            if not os.path.isfile(exe_path):
+                continue
+            key = exe_path.lower()
+            if key in seen_exes:
+                continue
+            seen_exes.add(key)
+            found.append({
+                "version": _version_from_folder_name(name, spec["folder_prefix"]),
+                "exe_path": exe_path,
+                "install_dir": install_dir,
+            })
+
+    found.sort(key=_version_sort_key, reverse=True)
+    return found
+
+
+_YEAR_RE = re.compile(r"(\d{4})")
+
+
+def _version_sort_key(item):
+    """
+    Newest first, so the most likely pick sits at the top of the
+    dropdown. Sorting these as plain text does not work: "CC 2019"
+    would beat "2026" because "C" outranks "2", putting the oldest
+    install first. So sort on the year number itself, and rank a bare
+    year above a CC/CS-prefixed one of the same year, since the
+    modern naming is the newer product.
+    """
+    version = item["version"]
+    match = _YEAR_RE.search(version)
+    year = int(match.group(1)) if match else 0
+    is_modern_naming = not re.match(r"^(CC|CS)\b", version, re.IGNORECASE)
+    return (year, is_modern_naming, version)
+
+
+# ------------------------------------------------------------
+# Connection registry. Stored in the same local state file the current
+# user pick lives in, so it is per machine, which is what we want,
+# a connection describes software installed on THIS computer.
+# ------------------------------------------------------------
+
+def read_connections():
+    state = read_local_state()
+    connections = state.get("software_connections")
+    return connections if isinstance(connections, dict) else {}
+
+
+def write_connections(connections):
+    state = read_local_state()
+    state["software_connections"] = connections
+    return write_local_state(state)
+
+
+def _connection_health(record):
+    """
+    Cheap health check for an existing connection, used to decide
+    whether the tile's chain icon shows green or red. Only checks
+    things that are instant, no heavy work during a render of the
+    home screen.
+    """
+    exe_path = record.get("exe_path") or ""
+    if not exe_path or not os.path.isfile(exe_path):
+        return {"ok": False, "reason": "The software is no longer at the path it was connected from"}
+    return {"ok": True, "reason": ""}
+
+
+# ------------------------------------------------------------
 # Frames to MP4 tool. Detects a numbered image sequence matching the
 # basename.NNNN.ext convention already used throughout the pipeline
 # (e.g. BFP102_SQ06_SH07_smAnim_gali01-main_v001.1001.jpg), reads the
@@ -1146,6 +1281,197 @@ class MnrApi:
             "current_frame": current,
             "total_frames": total,
         }
+
+    # --------------------------------------------------------
+    # Connect Software
+    # --------------------------------------------------------
+
+    def scan_installed_software(self):
+        """
+        One shallow pass over the known install roots for every entry
+        in the catalog. Called once during boot, so it is kept cheap
+        on purpose. Anything it misses is still reachable by letting
+        the artist point at the exe themselves.
+        """
+        results = {}
+        for software_id, spec in _SOFTWARE_CATALOG.items():
+            installs = _scan_one_software(software_id)
+            results[software_id] = {
+                "label": spec["label"],
+                "detected": len(installs) > 0,
+                "installs": installs,
+            }
+        _log(f"scan_installed_software: {[(k, len(v['installs'])) for k, v in results.items()]}")
+        return {"ok": True, "software": results}
+
+    def browse_for_software_exe(self, software_id):
+        """
+        Manual fallback for an install the scan did not find, or a
+        second copy somewhere unusual. Verifies the chosen file is
+        actually the right executable rather than trusting the pick,
+        an artist hunting through Program Files can easily land on a
+        neighbouring exe.
+        """
+        spec = _SOFTWARE_CATALOG.get(software_id)
+        if not spec:
+            return {"ok": False, "detail": "Unknown software"}
+
+        try:
+            result = webview.windows[0].create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=False,
+                file_types=(f"{spec['label']} ({spec['exe_name']})", "All files (*.*)"),
+            )
+        except Exception as e:
+            _log(f"browse_for_software_exe failed: {e}")
+            return {"ok": False, "detail": str(e)}
+
+        if not result:
+            return {"ok": True, "cancelled": True}
+
+        exe_path = result[0]
+        if os.path.basename(exe_path).lower() != spec["exe_name"].lower():
+            return {
+                "ok": False,
+                "detail": f"That is not {spec['exe_name']}. Pick the {spec['label']} program file itself.",
+            }
+
+        # Walk back up from "<install>/Support Files/AfterFX.exe" to
+        # "<install>", so a manual pick produces the same shape of
+        # record as a detected one.
+        install_dir = os.path.dirname(exe_path)
+        depth = len(spec["exe_subpath"].split(os.sep)) - 1
+        for _ in range(depth):
+            install_dir = os.path.dirname(install_dir)
+
+        folder_name = os.path.basename(install_dir)
+        if folder_name.startswith(spec["folder_prefix"]):
+            version = _version_from_folder_name(folder_name, spec["folder_prefix"])
+        else:
+            version = "custom"
+
+        return {
+            "ok": True,
+            "cancelled": False,
+            "install": {"version": version, "exe_path": exe_path, "install_dir": install_dir},
+        }
+
+    def get_software_connections(self):
+        """
+        Every existing connection plus a live health check on each, so
+        the home screen can colour each tile's chain icon without a
+        second round trip.
+        """
+        connections = read_connections()
+        out = {}
+        for key, record in connections.items():
+            health = _connection_health(record)
+            out[key] = dict(record)
+            out[key]["healthy"] = health["ok"]
+            out[key]["problem"] = health["reason"]
+        return {"ok": True, "connections": out}
+
+    def connect_software(self, software_id, install):
+        """
+        Records a connection. The actual plugin install will hook in
+        here later, right now this only establishes the link and the
+        tile that represents it.
+        """
+        spec = _SOFTWARE_CATALOG.get(software_id)
+        if not spec:
+            return {"ok": False, "detail": "Unknown software"}
+
+        exe_path = (install or {}).get("exe_path")
+        if not exe_path or not os.path.isfile(exe_path):
+            return {"ok": False, "detail": "That program file no longer exists"}
+
+        # Keyed per version, so an artist running two versions of the
+        # same software side by side gets a tile for each rather than
+        # one silently replacing the other.
+        version = install.get("version") or "?"
+        key = f"{software_id}::{version}"
+
+        connections = read_connections()
+        connections[key] = {
+            "software_id": software_id,
+            "label": spec["label"],
+            "version": version,
+            "exe_path": exe_path,
+            "install_dir": install.get("install_dir") or os.path.dirname(exe_path),
+            "connected_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "plugin_version": None,  # filled in once the plugin install is built
+        }
+        write_connections(connections)
+        _log(f"connect_software: {key} -> {exe_path}")
+        return {"ok": True, "key": key}
+
+    def disconnect_software(self, key):
+        connections = read_connections()
+        if key not in connections:
+            return {"ok": False, "detail": "That connection no longer exists"}
+        removed = connections.pop(key)
+        write_connections(connections)
+        _log(f"disconnect_software: {key}")
+        return {"ok": True, "label": removed.get("label", "")}
+
+    def repair_software_connection(self, key):
+        """
+        Re-runs detection for that software and re-points the existing
+        connection at a matching install, which covers the common case
+        of the artist upgrading or reinstalling in place. Anything it
+        cannot resolve automatically is reported back so the UI can
+        offer a manual re-pick instead of failing silently.
+        """
+        connections = read_connections()
+        record = connections.get(key)
+        if not record:
+            return {"ok": False, "detail": "That connection no longer exists"}
+
+        software_id = record.get("software_id")
+        installs = _scan_one_software(software_id)
+        if not installs:
+            return {"ok": False, "detail": "Could not find that software installed anywhere, reconnect it manually"}
+
+        match = next((i for i in installs if i["version"] == record.get("version")), None) or installs[0]
+        record["exe_path"] = match["exe_path"]
+        record["install_dir"] = match["install_dir"]
+        record["version"] = match["version"]
+        connections[key] = record
+        write_connections(connections)
+        _log(f"repair_software_connection: {key} -> {match['exe_path']}")
+        return {"ok": True, "version": match["version"]}
+
+    def launch_connected_software(self, key):
+        connections = read_connections()
+        record = connections.get(key)
+        if not record:
+            return {"ok": False, "detail": "That connection no longer exists"}
+
+        exe_path = record.get("exe_path")
+        if not exe_path or not os.path.isfile(exe_path):
+            return {"ok": False, "detail": "The software is no longer at the path it was connected from"}
+
+        try:
+            subprocess.Popen([exe_path], cwd=os.path.dirname(exe_path))
+            _log(f"launch_connected_software: {exe_path}")
+            return {"ok": True}
+        except Exception as e:
+            _log(f"launch_connected_software failed: {e}")
+            return {"ok": False, "detail": str(e)}
+
+    def open_connection_folder(self, key):
+        connections = read_connections()
+        record = connections.get(key)
+        if not record:
+            return {"ok": False, "detail": "That connection no longer exists"}
+        install_dir = record.get("install_dir")
+        if not install_dir or not os.path.isdir(install_dir):
+            return {"ok": False, "detail": "That folder no longer exists"}
+        try:
+            os.startfile(install_dir)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "detail": str(e)}
 
     # --------------------------------------------------------
     # Refresh: when this app was launched by the installed bootstrap
