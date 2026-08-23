@@ -685,6 +685,157 @@ def _resolve_pcloud_path(relative_parts, from_root=False):
 
 
 # ------------------------------------------------------------
+# Job queue.
+#
+# Long running work (uploads, archiving) runs here instead of blocking
+# whichever screen started it, so an artist can fire off an upload and
+# immediately go set up the next one.
+#
+# Jobs run ONE AT A TIME on a single worker thread, deliberately.
+# Running several at once would have them competing for the same disk
+# and network, making everything slower and the progress meaningless.
+#
+# IMPORTANT: progress here measures writing files into the P: drive
+# from this machine. It says nothing about pCloud finishing its own
+# sync up to the cloud afterwards, that is what the pCloud status pill
+# in the top bar is for. A job reaching 100% means the files are
+# correctly placed locally, not that they have finished uploading.
+# ------------------------------------------------------------
+
+_JOBS = []                      # newest last
+_JOBS_LOCK = threading.Lock()
+_JOB_WORKER = {"running": False}
+_JOB_COUNTER = {"n": 0}
+
+
+def _job_create(type_key, job_type, label):
+    with _JOBS_LOCK:
+        _JOB_COUNTER["n"] += 1
+        job = {
+            "id": f"job_{_JOB_COUNTER['n']}",
+            "type_key": type_key,
+            "type": job_type,
+            "label": label,
+            "status": "queued",     # queued | running | done | failed | cancelled
+            "percent": 0,
+            "total_bytes": 0,
+            "copied_bytes": 0,
+            "current_item": "",
+            "lines": [],            # [{"text": str, "kind": "ok"|"fail"|"info"}]
+            "cancel_requested": False,
+            "queued_at": time.time(),
+            "started_at": None,
+            "finished_at": None,
+            "payload": None,        # job specific, never sent to the UI
+        }
+        _JOBS.append(job)
+    return job
+
+
+def _job_line(job, text, kind="info"):
+    job["lines"].append({"text": text, "kind": kind})
+
+
+def _job_bump(job, num_bytes):
+    job["copied_bytes"] += num_bytes
+    total = job["total_bytes"]
+    if total > 0:
+        job["percent"] = min(100, int((job["copied_bytes"] / total) * 100))
+
+
+def _job_public_view(job):
+    """What the UI is allowed to see, the internal payload stays out."""
+    elapsed = 0
+    if job["started_at"]:
+        end = job["finished_at"] or time.time()
+        elapsed = end - job["started_at"]
+
+    eta_seconds = None
+    if job["status"] == "running" and job["copied_bytes"] > 0 and elapsed > 1:
+        rate = job["copied_bytes"] / elapsed
+        if rate > 0:
+            eta_seconds = max(job["total_bytes"] - job["copied_bytes"], 0) / rate
+
+    return {
+        "id": job["id"],
+        "type": job["type"],
+        "label": job["label"],
+        "status": job["status"],
+        "percent": job["percent"],
+        "current_item": job["current_item"],
+        "lines": list(job["lines"]),
+        "eta_seconds": eta_seconds,
+        "elapsed_seconds": int(elapsed),
+        "total_bytes": job["total_bytes"],
+        "copied_bytes": job["copied_bytes"],
+    }
+
+
+def _job_check_cancel(job):
+    if job["cancel_requested"]:
+        raise _JobCancelled()
+
+
+class _JobCancelled(Exception):
+    pass
+
+
+def _job_worker_loop():
+    """
+    Pulls queued jobs and runs them one after another until the queue
+    is empty, then stops. Restarted on the next submit.
+    """
+    while True:
+        with _JOBS_LOCK:
+            job = next((j for j in _JOBS if j["status"] == "queued"), None)
+            if not job:
+                _JOB_WORKER["running"] = False
+                return
+            job["status"] = "running"
+            job["started_at"] = time.time()
+
+        try:
+            if job["cancel_requested"]:
+                raise _JobCancelled()
+            runner = _JOB_RUNNERS.get(job["type_key"])
+            if not runner:
+                raise RuntimeError(f"No runner for job type {job['type_key']}")
+            runner(job)
+            job["status"] = "done"
+            job["percent"] = 100
+        except _JobCancelled:
+            job["status"] = "cancelled"
+            _job_line(job, "Cancelled", "fail")
+        except Exception as e:
+            job["status"] = "failed"
+            _job_line(job, f"Failed: {e}", "fail")
+            _log(f"job {job['id']} failed: {e}")
+
+        job["current_item"] = ""
+        job["finished_at"] = time.time()
+
+
+def _job_start_worker():
+    with _JOBS_LOCK:
+        if _JOB_WORKER["running"]:
+            return
+        _JOB_WORKER["running"] = True
+    thread = threading.Thread(target=_job_worker_loop, daemon=True)
+    thread.start()
+
+
+def _safe_size(path):
+    try:
+        return os.path.getsize(path)
+    except Exception:
+        return 0
+
+
+# Filled in below, once the individual runners are defined.
+_JOB_RUNNERS = {}
+
+
+# ------------------------------------------------------------
 # Archive/Restore queue runs on a background thread so the UI can show
 # a live byte-based progress bar and estimated time remaining instead
 # of freezing while a big folder zips or unzips. Progress is tracked
@@ -836,6 +987,286 @@ def _run_archive_queue_worker(archive_items, restore_items, delete_source, delet
     _ARCHIVE_PROGRESS["current_item"] = ""
     _ARCHIVE_PROGRESS["active"] = False
     _ARCHIVE_PROGRESS["done"] = True
+
+
+# ------------------------------------------------------------
+# Job runners
+# ------------------------------------------------------------
+
+def _upload_total_bytes(payload):
+    """
+    Adds up every file this upload will write, so the progress bar
+    reflects real work rather than a count of layers.
+    """
+    total = 0
+    for layer in payload.get("layers", []):
+        mp4 = layer.get("mp4") or {}
+        if mp4.get("enabled") and mp4.get("path"):
+            total += _safe_size(mp4["path"])
+        for key in ("raw", "jpeg", "production_data"):
+            section = layer.get(key) or {}
+            if section.get("enabled"):
+                for p in section.get("paths") or []:
+                    total += _safe_size(p)
+    return total
+
+
+def _copy_tracked(src, dest, job):
+    """Copy one file and count it toward the job's progress."""
+    _job_check_cancel(job)
+    shutil.copy2(src, dest)
+    _job_bump(job, _safe_size(src))
+
+
+def _run_upload_job(job):
+    payload = job["payload"]
+    shot_parts = payload["shot_parts"]
+    layers = payload.get("layers", [])
+
+    root = get_pcloud_root()
+    media_dir = os.path.join(
+        root, "01-projects", *shot_parts,
+        "smAnim", "export", "publish", "media",
+    )
+    os.makedirs(media_dir, exist_ok=True)
+
+    for layer in layers:
+        _job_check_cancel(job)
+        base_name = layer["base_name"]
+        job["current_item"] = base_name
+        _job_line(job, f"{base_name}", "info")
+
+        # ---- mp4 / mov preview supplied as a file ----
+        mp4 = layer.get("mp4") or {}
+        if mp4.get("enabled") and mp4.get("path"):
+            try:
+                src = mp4["path"]
+                ext = os.path.splitext(src)[1] or ".mp4"
+                dest = os.path.join(media_dir, f"{base_name}{ext}")
+                _copy_tracked(src, dest, job)
+                _job_line(job, f"  mp4: {os.path.basename(dest)}", "ok")
+            except _JobCancelled:
+                raise
+            except Exception as e:
+                _job_line(job, f"  mp4 failed: {e}", "fail")
+
+        # ---- raw / jpeg sequences ----
+        for section_key in ("raw", "jpeg"):
+            section = layer.get(section_key) or {}
+            if not section.get("enabled") or not section.get("paths"):
+                continue
+            try:
+                detail = _copy_sequence_tracked(media_dir, base_name, section, job)
+                _job_line(job, f"  {section_key}: {detail}", "ok")
+            except _JobCancelled:
+                raise
+            except Exception as e:
+                _job_line(job, f"  {section_key} failed: {e}", "fail")
+
+        # ---- production data ----
+        prod = layer.get("production_data") or {}
+        if prod.get("enabled") and prod.get("paths"):
+            try:
+                prod_dir = os.path.join(media_dir, f"{base_name}-productionData")
+                os.makedirs(prod_dir, exist_ok=True)
+                copied = 0
+                for src in prod["paths"]:
+                    _copy_tracked(src, os.path.join(prod_dir, os.path.basename(src)), job)
+                    copied += 1
+                _job_line(job, f"  production data: {copied} file(s)", "ok")
+            except _JobCancelled:
+                raise
+            except Exception as e:
+                _job_line(job, f"  production data failed: {e}", "fail")
+
+        # ---- generated preview video ----
+        if mp4.get("enabled") and mp4.get("make_from_frames") and not mp4.get("path"):
+            try:
+                job["current_item"] = f"{base_name} (rendering preview)"
+                result = _render_preview_for_job(media_dir, base_name, layer, mp4)
+                _job_line(job, f"  preview: {result['detail']}", "ok" if result["ok"] else "fail")
+            except Exception as e:
+                _job_line(job, f"  preview failed: {e}", "fail")
+
+    job["current_item"] = ""
+
+
+def _copy_sequence_tracked(media_dir, base_name, section, job):
+    """
+    Same renaming rules as the original sequence copy, with each file
+    counted toward job progress as it lands.
+    """
+    paths = section["paths"]
+    handle_front = int(section.get("handle_front") or 0)
+    ext = os.path.splitext(paths[0])[1].lstrip(".").lower() or "seq"
+
+    seq_folder = os.path.join(media_dir, base_name, ext)
+    os.makedirs(seq_folder, exist_ok=True)
+
+    start_frame = 1001 - handle_front
+    ordered = sorted(paths)
+    for index, src in enumerate(ordered):
+        frame_number = start_frame + index
+        dest = os.path.join(seq_folder, f"{base_name}.{frame_number:04d}.{ext}")
+        _copy_tracked(src, dest, job)
+
+    return f"{len(ordered)} frame(s) into {ext}/"
+
+
+def _render_preview_for_job(media_dir, base_name, layer, mp4_settings):
+    """Module level twin of the API method, callable from the worker."""
+    paths = _resolve_ffmpeg_paths()
+    if not paths:
+        return {"ok": False, "detail": "ffmpeg not found in the pipeline folder"}
+
+    source_folder = None
+    for section_key in ("jpeg", "raw"):
+        section = layer.get(section_key) or {}
+        if not section.get("enabled") or not section.get("paths"):
+            continue
+        ext = os.path.splitext(section["paths"][0])[1].lstrip(".").lower()
+        candidate = os.path.join(media_dir, base_name, ext)
+        if os.path.isdir(candidate):
+            source_folder = candidate
+            break
+
+    if not source_folder:
+        return {"ok": False, "detail": "No uploaded frames to build a preview from"}
+
+    seq = _detect_frame_sequence(source_folder)
+    if not seq:
+        return {"ok": False, "detail": "Could not read the uploaded frames as a sequence"}
+
+    framerate = mp4_settings.get("framerate") or 12
+    scale_percent = mp4_settings.get("scale") or 50
+    bitrate = mp4_settings.get("bitrate") or 8000
+    output_path = os.path.join(media_dir, f"{base_name}.mp4")
+
+    input_pattern = os.path.join(source_folder, f"{seq['prefix']}.%0{seq['padding']}d.{seq['ext']}")
+    scale_factor = scale_percent / 100.0
+
+    cmd = [
+        paths["exe_path"], "-y",
+        "-start_number", str(seq["start_frame"]),
+        "-framerate", str(framerate),
+        "-i", input_pattern,
+        "-vf", f"scale=iw*{scale_factor}:ih*{scale_factor}",
+        "-c:v", "libx264",
+        "-b:v", f"{bitrate}k",
+        "-pix_fmt", "yuv420p",
+        output_path,
+    ]
+
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0 or not os.path.isfile(output_path):
+        tail = (proc.stderr or "").strip().splitlines()
+        reason = tail[-1] if tail else f"ffmpeg exited with code {proc.returncode}"
+        return {"ok": False, "detail": f"render failed: {reason}"}
+
+    return {"ok": True, "detail": f"{os.path.basename(output_path)} from {seq['frame_count']} frames"}
+
+
+def _run_archive_job(job):
+    payload = job["payload"]
+    delete_source = payload.get("delete_source", True)
+    delete_zip = payload.get("delete_zip", True)
+
+    for item in payload.get("archive_items", []):
+        _job_check_cancel(job)
+        name = item.get("name", "")
+        folder_path = _resolve_pcloud_path(item.get("pathParts", []), bool(item.get("fromRoot")))
+        job["current_item"] = f"Archiving {name}"
+
+        if not os.path.isdir(folder_path):
+            _job_line(job, f"{name}: folder not found", "fail")
+            continue
+
+        zip_path = folder_path.rstrip("\\/") + ".zip"
+        if os.path.exists(zip_path):
+            _job_line(job, f"{name}: a zip with that name already exists", "fail")
+            continue
+
+        try:
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as zf:
+                for dirpath, _dirs, filenames in os.walk(folder_path):
+                    for fname in filenames:
+                        _job_check_cancel(job)
+                        full = os.path.join(dirpath, fname)
+                        zf.write(full, os.path.relpath(full, folder_path))
+                        _job_bump(job, _safe_size(full))
+        except _JobCancelled:
+            try:
+                if os.path.exists(zip_path):
+                    os.remove(zip_path)
+            except Exception:
+                pass
+            _job_line(job, f"{name}: cancelled, original left untouched", "fail")
+            raise
+        except Exception as e:
+            try:
+                if os.path.exists(zip_path):
+                    os.remove(zip_path)
+            except Exception:
+                pass
+            _job_line(job, f"{name}: {e}", "fail")
+            continue
+
+        if delete_source:
+            try:
+                shutil.rmtree(folder_path)
+            except Exception as e:
+                _job_line(job, f"{name}: zipped, but could not delete original: {e}", "fail")
+                continue
+
+        _job_line(job, f"{name} -> {os.path.basename(zip_path)}", "ok")
+
+    for item in payload.get("restore_items", []):
+        _job_check_cancel(job)
+        name = item.get("name", "")
+        zip_path = _resolve_pcloud_path(item.get("pathParts", []), bool(item.get("fromRoot")))
+        job["current_item"] = f"Restoring {name}"
+
+        if not os.path.isfile(zip_path) or not zip_path.lower().endswith(".zip"):
+            _job_line(job, f"{name}: not a zip file", "fail")
+            continue
+
+        dest_folder = zip_path[:-4]
+        if os.path.exists(dest_folder):
+            _job_line(job, f"{name}: a folder with that name already exists", "fail")
+            continue
+
+        try:
+            os.makedirs(dest_folder, exist_ok=True)
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                for zi in zf.infolist():
+                    _job_check_cancel(job)
+                    zf.extract(zi, dest_folder)
+                    _job_bump(job, zi.file_size)
+        except _JobCancelled:
+            try:
+                shutil.rmtree(dest_folder)
+            except Exception:
+                pass
+            _job_line(job, f"{name}: cancelled, original zip left untouched", "fail")
+            raise
+        except Exception as e:
+            _job_line(job, f"{name}: {e}", "fail")
+            continue
+
+        if delete_zip:
+            try:
+                os.remove(zip_path)
+            except Exception as e:
+                _job_line(job, f"{name}: extracted, but could not delete the zip: {e}", "fail")
+                continue
+
+        _job_line(job, f"{name} -> {os.path.basename(dest_folder)}", "ok")
+
+    job["current_item"] = ""
+
+
+_JOB_RUNNERS["upload"] = _run_upload_job
+_JOB_RUNNERS["archive"] = _run_archive_job
 
 
 # ------------------------------------------------------------
@@ -1812,6 +2243,88 @@ class MnrApi:
             return {"ok": False, "detail": "That folder does not exist"}
 
         return {"ok": True, "parts": parts}
+
+    # --------------------------------------------------------
+    # Job queue
+    # --------------------------------------------------------
+
+    def submit_upload_job(self, payload):
+        """
+        Queues a whole Stop Motion Upload (all layers at once) and
+        returns immediately, so the screen can be left straight away.
+        """
+        layers = payload.get("layers") or []
+        if not layers:
+            return {"ok": False, "detail": "Nothing to upload"}
+
+        shot_parts = payload.get("shot_parts") or []
+        shot_label = "/".join(shot_parts[-3:]) if shot_parts else "shot"
+        label = f"{shot_label} ({len(layers)} layer{'s' if len(layers) != 1 else ''})"
+
+        job = _job_create("upload", "Stop Motion Upload", label)
+        job["payload"] = payload
+        job["total_bytes"] = _upload_total_bytes(payload)
+        _job_start_worker()
+        _log(f"submit_upload_job: {job['id']} {label} ({job['total_bytes']} bytes)")
+        return {"ok": True, "job_id": job["id"]}
+
+    def submit_archive_job(self, archive_items, restore_items, delete_source=True, delete_zip=True):
+        archive_items = archive_items or []
+        restore_items = restore_items or []
+        if not archive_items and not restore_items:
+            return {"ok": False, "detail": "Nothing queued"}
+
+        parts = []
+        if archive_items:
+            parts.append(f"{len(archive_items)} to archive")
+        if restore_items:
+            parts.append(f"{len(restore_items)} to restore")
+        label = ", ".join(parts)
+
+        job = _job_create("archive", "Archive / Restore", label)
+        job["payload"] = {
+            "archive_items": archive_items,
+            "restore_items": restore_items,
+            "delete_source": delete_source,
+            "delete_zip": delete_zip,
+        }
+
+        total = 0
+        for item in archive_items:
+            path = _resolve_pcloud_path(item.get("pathParts", []), bool(item.get("fromRoot")))
+            if os.path.isdir(path):
+                total += _folder_byte_size(path)
+        for item in restore_items:
+            path = _resolve_pcloud_path(item.get("pathParts", []), bool(item.get("fromRoot")))
+            total += _safe_size(path)
+        job["total_bytes"] = total
+
+        _job_start_worker()
+        _log(f"submit_archive_job: {job['id']} {label}")
+        return {"ok": True, "job_id": job["id"]}
+
+    def get_jobs(self):
+        with _JOBS_LOCK:
+            jobs = [_job_public_view(j) for j in _JOBS]
+        active = sum(1 for j in jobs if j["status"] in ("queued", "running"))
+        return {"ok": True, "jobs": jobs, "active_count": active}
+
+    def cancel_job(self, job_id):
+        with _JOBS_LOCK:
+            job = next((j for j in _JOBS if j["id"] == job_id), None)
+            if not job:
+                return {"ok": False, "detail": "No such job"}
+            if job["status"] in ("done", "failed", "cancelled"):
+                return {"ok": False, "detail": "That job already finished"}
+            job["cancel_requested"] = True
+        return {"ok": True}
+
+    def clear_finished_jobs(self):
+        with _JOBS_LOCK:
+            keep = [j for j in _JOBS if j["status"] in ("queued", "running")]
+            removed = len(_JOBS) - len(keep)
+            _JOBS[:] = keep
+        return {"ok": True, "removed": removed}
 
     def upload_layer_publish(self, payload):
         """
