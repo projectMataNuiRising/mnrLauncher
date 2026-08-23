@@ -391,6 +391,30 @@ _SOFTWARE_CATALOG = {
     },
 }
 
+# Visible only while the Debug panel is open. Real software has to
+# actually be installed to show its detected state, which makes the
+# colours awkward to compare, this one fakes several versions so all
+# the states can be seen side by side.
+_DEMO_SOFTWARE_ID = "demo_software"
+
+_DEMO_SOFTWARE = {
+    "label": "Demo Software",
+    "detected": True,
+    "installs": [
+        {"version": "2026", "exe_path": "<demo>", "install_dir": r"C:\Demo\Demo Software 2026"},
+        {"version": "2025", "exe_path": "<demo>", "install_dir": r"C:\Demo\Demo Software 2025"},
+        {"version": "CC 2019", "exe_path": "<demo>", "install_dir": r"C:\Demo\Demo Software CC 2019"},
+    ],
+}
+
+_DEMO_UNDETECTED_ID = "demo_software_missing"
+
+_DEMO_UNDETECTED = {
+    "label": "Demo (Not Installed)",
+    "detected": False,
+    "installs": [],
+}
+
 
 def _version_from_folder_name(folder_name, prefix):
     """
@@ -486,6 +510,14 @@ def _connection_health(record):
     things that are instant, no heavy work during a render of the
     home screen.
     """
+    if record.get("demo"):
+        # One demo version reports a problem on purpose, so the red
+        # chain state and its menu can be seen without having to break
+        # a real install to get there.
+        if record.get("version") == "CC 2019":
+            return {"ok": False, "reason": "Demo: this is what a broken connection looks like"}
+        return {"ok": True, "reason": ""}
+
     exe_path = record.get("exe_path") or ""
     if not exe_path or not os.path.isfile(exe_path):
         return {"ok": False, "reason": "The software is no longer at the path it was connected from"}
@@ -1286,12 +1318,16 @@ class MnrApi:
     # Connect Software
     # --------------------------------------------------------
 
-    def scan_installed_software(self):
+    def scan_installed_software(self, include_demo=False):
         """
         One shallow pass over the known install roots for every entry
         in the catalog. Called once during boot, so it is kept cheap
         on purpose. Anything it misses is still reachable by letting
         the artist point at the exe themselves.
+
+        include_demo adds two fake entries, one detected with several
+        versions and one not detected, purely so the tile states can
+        be compared visually. Only ever passed while Debug is open.
         """
         results = {}
         for software_id, spec in _SOFTWARE_CATALOG.items():
@@ -1301,6 +1337,9 @@ class MnrApi:
                 "detected": len(installs) > 0,
                 "installs": installs,
             }
+        if include_demo:
+            results[_DEMO_SOFTWARE_ID] = dict(_DEMO_SOFTWARE)
+            results[_DEMO_UNDETECTED_ID] = dict(_DEMO_UNDETECTED)
         _log(f"scan_installed_software: {[(k, len(v['installs'])) for k, v in results.items()]}")
         return {"ok": True, "software": results}
 
@@ -1377,29 +1416,36 @@ class MnrApi:
         here later, right now this only establishes the link and the
         tile that represents it.
         """
-        spec = _SOFTWARE_CATALOG.get(software_id)
-        if not spec:
-            return {"ok": False, "detail": "Unknown software"}
+        is_demo = software_id in (_DEMO_SOFTWARE_ID, _DEMO_UNDETECTED_ID)
 
-        exe_path = (install or {}).get("exe_path")
-        if not exe_path or not os.path.isfile(exe_path):
-            return {"ok": False, "detail": "That program file no longer exists"}
+        if is_demo:
+            label = _DEMO_SOFTWARE["label"] if software_id == _DEMO_SOFTWARE_ID else _DEMO_UNDETECTED["label"]
+            exe_path = (install or {}).get("exe_path") or "<demo>"
+        else:
+            spec = _SOFTWARE_CATALOG.get(software_id)
+            if not spec:
+                return {"ok": False, "detail": "Unknown software"}
+            label = spec["label"]
+            exe_path = (install or {}).get("exe_path")
+            if not exe_path or not os.path.isfile(exe_path):
+                return {"ok": False, "detail": "That program file no longer exists"}
 
         # Keyed per version, so an artist running two versions of the
         # same software side by side gets a tile for each rather than
         # one silently replacing the other.
-        version = install.get("version") or "?"
+        version = (install or {}).get("version") or "?"
         key = f"{software_id}::{version}"
 
         connections = read_connections()
         connections[key] = {
             "software_id": software_id,
-            "label": spec["label"],
+            "label": label,
             "version": version,
             "exe_path": exe_path,
-            "install_dir": install.get("install_dir") or os.path.dirname(exe_path),
+            "install_dir": (install or {}).get("install_dir") or os.path.dirname(exe_path),
             "connected_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "plugin_version": None,  # filled in once the plugin install is built
+            "demo": is_demo,
         }
         write_connections(connections)
         _log(f"connect_software: {key} -> {exe_path}")
@@ -1427,6 +1473,9 @@ class MnrApi:
         if not record:
             return {"ok": False, "detail": "That connection no longer exists"}
 
+        if record.get("demo"):
+            return {"ok": False, "detail": "This is a demo tile, there is nothing to repair"}
+
         software_id = record.get("software_id")
         installs = _scan_one_software(software_id)
         if not installs:
@@ -1447,6 +1496,9 @@ class MnrApi:
         if not record:
             return {"ok": False, "detail": "That connection no longer exists"}
 
+        if record.get("demo"):
+            return {"ok": False, "detail": "This is a demo tile, there is nothing to launch"}
+
         exe_path = record.get("exe_path")
         if not exe_path or not os.path.isfile(exe_path):
             return {"ok": False, "detail": "The software is no longer at the path it was connected from"}
@@ -1464,6 +1516,9 @@ class MnrApi:
         record = connections.get(key)
         if not record:
             return {"ok": False, "detail": "That connection no longer exists"}
+        if record.get("demo"):
+            return {"ok": False, "detail": "This is a demo tile, that folder does not exist"}
+
         install_dir = record.get("install_dir")
         if not install_dir or not os.path.isdir(install_dir):
             return {"ok": False, "detail": "That folder no longer exists"}
@@ -1824,8 +1879,96 @@ class MnrApi:
             except Exception as e:
                 results["production_data"] = {"ok": False, "detail": str(e)}
 
+        # ---- generated preview video, built from the frames we just
+        # copied rather than from a file the artist supplies ----
+        if mp4.get("enabled") and mp4.get("make_from_frames") and not mp4.get("path"):
+            try:
+                results["mp4"] = self._render_preview_from_frames(media_dir, base_name, payload, mp4)
+            except Exception as e:
+                results["mp4"] = {"ok": False, "detail": str(e)}
+
         _log(f"upload_layer_publish: finished {base_name}: {results}")
         return {"ok": True, "results": results}
+
+    def _render_preview_from_frames(self, media_dir, base_name, payload, mp4_settings):
+        """
+        Builds the preview mp4 out of the sequence that was just copied
+        into place, so it is generated from the exact renamed frames
+        that ended up on disk rather than from the local originals.
+
+        Prefers the jpeg sequence when one was uploaded, ffmpeg decodes
+        jpeg natively. Raw is only attempted when no jpeg exists.
+        """
+        paths = _resolve_ffmpeg_paths()
+        if not paths:
+            return {"ok": False, "detail": "ffmpeg not found in the pipeline folder"}
+
+        # Pick the source folder, jpeg first since it is the reliable one.
+        source_folder = None
+        for section_key in ("jpeg", "raw"):
+            section = payload.get(section_key) or {}
+            if not section.get("enabled") or not section.get("paths"):
+                continue
+            ext = os.path.splitext(section["paths"][0])[1].lstrip(".").lower()
+            candidate = os.path.join(media_dir, base_name, ext)
+            if os.path.isdir(candidate):
+                source_folder = candidate
+                break
+
+        if not source_folder:
+            return {"ok": False, "detail": "No uploaded frames to build a preview from"}
+
+        seq = _detect_frame_sequence(source_folder)
+        if not seq:
+            return {"ok": False, "detail": "Could not read the uploaded frames as a sequence"}
+
+        framerate = mp4_settings.get("framerate") or 12
+        scale_percent = mp4_settings.get("scale") or 50
+        bitrate = mp4_settings.get("bitrate") or 8000
+        output_path = os.path.join(media_dir, f"{base_name}.mp4")
+
+        input_pattern = os.path.join(source_folder, f"{seq['prefix']}.%0{seq['padding']}d.{seq['ext']}")
+        scale_factor = scale_percent / 100.0
+
+        cmd = [
+            paths["exe_path"], "-y",
+            "-start_number", str(seq["start_frame"]),
+            "-framerate", str(framerate),
+            "-i", input_pattern,
+            "-vf", f"scale=iw*{scale_factor}:ih*{scale_factor}",
+            "-c:v", "libx264",
+            "-b:v", f"{bitrate}k",
+            "-pix_fmt", "yuv420p",
+            output_path,
+        ]
+
+        _log(f"_render_preview_from_frames: {seq['frame_count']} frames from {source_folder}")
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+
+        if proc.returncode != 0 or not os.path.isfile(output_path):
+            tail = (proc.stderr or "").strip().splitlines()
+            reason = tail[-1] if tail else f"ffmpeg exited with code {proc.returncode}"
+            return {"ok": False, "detail": f"Preview render failed: {reason}"}
+
+        return {"ok": True, "detail": f"{os.path.basename(output_path)} (generated from {seq['frame_count']} frames)"}
+
+    def inspect_local_frames(self, paths):
+        """
+        Reads the resolution off the first locally selected frame, so
+        the layer UI can show what the scaled output will actually be
+        before anything is uploaded.
+        """
+        if not paths:
+            return {"ok": False, "detail": "No frames selected yet"}
+        try:
+            from PIL import Image
+            with Image.open(paths[0]) as img:
+                width, height = img.size
+            return {"ok": True, "width": width, "height": height, "count": len(paths)}
+        except Exception as e:
+            # Camera raw files generally cannot be read this way, which
+            # is expected, the UI just skips the size readout then.
+            return {"ok": False, "detail": str(e), "count": len(paths)}
 
     def _copy_frame_sequence(self, media_dir, base_name, section):
         """
@@ -1885,9 +2028,61 @@ def _resolve_index_html():
         return original_path
 
 
+def _on_dom_drop(event):
+    """
+    pywebview only exposes the full path of a dropped file on the
+    PYTHON side, as event['dataTransfer']['files'][N]['pywebviewFullPath'].
+    JavaScript's own drop event never sees it, a browser deliberately
+    hides real disk paths. That is why handling the drop purely in JS
+    could never work, no matter how it was written.
+
+    So the drop is caught here instead, and the resulting paths are
+    handed back to the page. The page tracks which drop zone the
+    cursor was last over, so it knows where the files belong.
+    """
+    try:
+        files = (event.get("dataTransfer") or {}).get("files") or []
+        paths = [f.get("pywebviewFullPath") for f in files]
+        paths = [p for p in paths if p]
+        if not paths:
+            return
+        _log(f"drop: {len(paths)} file(s)")
+        payload = json.dumps(paths)
+        webview.windows[0].evaluate_js(f"window.__mnrHandleDrop && window.__mnrHandleDrop({payload})")
+    except Exception as e:
+        _log(f"drop handler failed: {e}")
+
+
+def _on_dom_drag(event):
+    """
+    Exists only so the drag events can be swallowed. Without this the
+    webview does its default thing and navigates away to the dropped
+    file, which looks like the whole app vanished.
+    """
+    return
+
+
+def _bind_dom_events(window):
+    """
+    Runs once the window exists. Wrapped in try/except because the DOM
+    API needs pywebview 5.x, if an older build somehow gets used the
+    app should still run, just without drag and drop, rather than
+    failing to start at all.
+    """
+    try:
+        from webview.dom import DOMEventHandler
+        window.dom.document.events.dragenter += DOMEventHandler(_on_dom_drag, True, True)
+        window.dom.document.events.dragstart += DOMEventHandler(_on_dom_drag, True, True)
+        window.dom.document.events.dragover += DOMEventHandler(_on_dom_drag, True, True, debounce=200)
+        window.dom.document.events.drop += DOMEventHandler(_on_dom_drop, True, True)
+        _log("Drag and drop enabled")
+    except Exception as e:
+        _log(f"Drag and drop unavailable: {e}")
+
+
 def main():
     api = MnrApi()
-    webview.create_window(
+    window = webview.create_window(
         APP_NAME,
         _resolve_index_html(),
         js_api=api,
@@ -1895,7 +2090,7 @@ def main():
         height=750,
         min_size=(900, 600),
     )
-    webview.start()
+    webview.start(_bind_dom_events, window)
 
     # If a shell update was applied, exit with the code the bootstrap
     # shell recognizes as "the relay is taking over, exit for good"

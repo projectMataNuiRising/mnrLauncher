@@ -514,23 +514,23 @@ body {
 }
 
 .tile-detected {
-  border-color: var(--green);
-  background: var(--green-soft);
+  border-color: rgba(76, 175, 125, 0.45);
+  background: var(--panel);
 }
 
 .tile-detected:hover {
   border-color: var(--green);
-  background: #24382d;
+  background: var(--panel-alt);
 }
 
 .tile-undetected {
-  border-color: var(--yellow);
-  background: var(--yellow-soft);
+  border-color: rgba(208, 165, 69, 0.45);
+  background: var(--panel);
 }
 
 .tile-undetected:hover {
   border-color: var(--yellow);
-  background: #3d3520;
+  background: var(--panel-alt);
 }
 
 .tile-badge-detected { color: var(--green); }

@@ -600,6 +600,10 @@ function computePendingMap() {
     if (layer.mp4.enabled && layer.mp4.path) {
       const ext = layer.mp4.path.match(/\.[^.]+$/)?.[0] || ".mp4";
       addPending(mediaKey, `${baseName}${ext}`, false);
+    } else if (layer.mp4.enabled && layer.mp4.makeFromFrames) {
+      // No file is being uploaded for this one, but a preview will be
+      // rendered into the same spot, so show it as pending too.
+      addPending(mediaKey, `${baseName}.mp4`, false);
     }
 
     ["raw", "jpeg"].forEach(key => {
@@ -802,6 +806,9 @@ debugToggle.addEventListener("change", () => {
     clearInterval(debugPollInterval);
     debugPollInterval = null;
   }
+  // The demo tiles only exist while Debug is open, so re-render the
+  // Connect Software section either way.
+  refreshSoftwareSection();
 });
 
 // ---------------------------------------------------------------
@@ -914,7 +921,14 @@ addLayerButton.addEventListener("click", () => {
   const id = "layer-" + (++layerIdCounter);
   layers.push({
     id, name: "", number: "01", variant: "main", version: "", collapsed: false,
-    mp4: { enabled: true, path: null },
+    mp4: {
+      enabled: true,
+      path: null,
+      makeFromFrames: false,
+      framerate: 12,
+      scale: 50,
+      bitrate: 8000,
+    },
     raw: { enabled: true, paths: [], override: false, typeOverride: false },
     jpeg: { enabled: true, paths: [], override: false, typeOverride: false },
     productionData: { enabled: false, paths: [] },
@@ -1282,6 +1296,44 @@ function findTypeMismatches(kind, paths) {
   return [];
 }
 
+// ---------------------------------------------------------------
+// Drag and drop.
+//
+// A browser never exposes a real disk path to JavaScript, so the drop
+// itself is caught in Python (see _on_dom_drop in main.py), which is
+// the only place pywebview surfaces the full path. Python then calls
+// window.__mnrHandleDrop with the paths.
+//
+// Because that Python handler is bound to the whole document, it has
+// no idea which zone was targeted. So every zone reports when the
+// cursor is over it, and the most recent one wins.
+// ---------------------------------------------------------------
+
+let activeDropTarget = null;
+
+window.__mnrHandleDrop = function (paths) {
+  if (!activeDropTarget || !Array.isArray(paths) || paths.length === 0) return;
+  const handler = activeDropTarget.onFiles;
+  activeDropTarget.el.classList.remove("drag-over");
+  activeDropTarget = null;
+  if (handler) handler(paths);
+};
+
+function registerDropTarget(el, onFiles) {
+  el.addEventListener("dragenter", () => {
+    activeDropTarget = { el, onFiles };
+    el.classList.add("drag-over");
+  });
+  el.addEventListener("dragover", () => {
+    activeDropTarget = { el, onFiles };
+    el.classList.add("drag-over");
+  });
+  el.addEventListener("dragleave", () => {
+    el.classList.remove("drag-over");
+    if (activeDropTarget && activeDropTarget.el === el) activeDropTarget = null;
+  });
+}
+
 function makeDropZone(labelText, onFiles) {
   const zone = document.createElement("div");
   zone.className = "drop-zone";
@@ -1300,22 +1352,7 @@ function makeDropZone(labelText, onFiles) {
     if (result.ok && result.paths.length) onFiles(result.paths);
   });
 
-  zone.addEventListener("dragover", (e) => {
-    e.preventDefault();
-    zone.classList.add("drag-over");
-  });
-  zone.addEventListener("dragleave", () => zone.classList.remove("drag-over"));
-  zone.addEventListener("drop", (e) => {
-    e.preventDefault();
-    zone.classList.remove("drag-over");
-    const files = Array.from(e.dataTransfer.files || []);
-    const paths = files.map(f => f.pywebviewFullPath).filter(Boolean);
-    if (paths.length) {
-      onFiles(paths);
-    } else if (files.length) {
-      sub.textContent = "Drag and drop isn't available in this build yet, click here to browse instead.";
-    }
-  });
+  registerDropTarget(zone, onFiles);
 
   return zone;
 }
@@ -1339,6 +1376,13 @@ function buildSingleFileSection(layer, key, title) {
   listEl.className = "file-list";
   sectionBody.appendChild(listEl);
 
+  // The mp4 section can build its preview out of the frames being
+  // uploaded instead of taking a file, in which case the drop zone
+  // is replaced by the render settings.
+  if (key === "mp4") {
+    sectionBody.appendChild(buildMakeFromFramesBlock(layer, state, zone, listEl));
+  }
+
   function refresh() {
     renderFileList(listEl, state.path ? [state.path] : [], () => {
       state.path = null;
@@ -1352,6 +1396,186 @@ function buildSingleFileSection(layer, key, title) {
 
   refresh();
   return wrap;
+}
+
+// Settings shown when "Make Preview Video from Uploaded Frames" is on.
+// The frame source is whatever raw/jpeg sequence the artist adds to
+// this same layer, so there is nothing to pick here, only how to
+// render it.
+function buildMakeFromFramesBlock(layer, state, zone, listEl) {
+  const block = document.createElement("div");
+
+  const toggleRow = document.createElement("label");
+  toggleRow.className = "checkbox-row";
+  const toggle = document.createElement("input");
+  toggle.type = "checkbox";
+  toggle.checked = state.makeFromFrames;
+  toggleRow.appendChild(toggle);
+  toggleRow.appendChild(document.createTextNode(" Make Preview Video from Uploaded Frames"));
+  block.appendChild(toggleRow);
+
+  const settings = document.createElement("div");
+  settings.className = "hidden";
+  block.appendChild(settings);
+
+  // Frame rate
+  const fpsGroup = document.createElement("div");
+  fpsGroup.className = "field-group";
+  const fpsLabel = document.createElement("label");
+  fpsLabel.className = "field-label";
+  fpsLabel.textContent = "Frame rate";
+  const fpsSelect = document.createElement("select");
+  fpsSelect.className = "field-select";
+  [12, 24].forEach(v => {
+    const opt = document.createElement("option");
+    opt.value = String(v);
+    opt.textContent = String(v);
+    fpsSelect.appendChild(opt);
+  });
+  const fpsCustomOpt = document.createElement("option");
+  fpsCustomOpt.value = "custom";
+  fpsCustomOpt.textContent = "Custom...";
+  fpsSelect.appendChild(fpsCustomOpt);
+  fpsSelect.value = String(state.framerate);
+  const fpsCustom = document.createElement("input");
+  fpsCustom.type = "number";
+  fpsCustom.min = "1";
+  fpsCustom.className = "field-select hidden";
+  fpsCustom.placeholder = "Custom fps";
+  fpsGroup.appendChild(fpsLabel);
+  fpsGroup.appendChild(fpsSelect);
+  fpsGroup.appendChild(fpsCustom);
+  settings.appendChild(fpsGroup);
+
+  // Scale
+  const scaleGroup = document.createElement("div");
+  scaleGroup.className = "field-group";
+  const scaleLabel = document.createElement("label");
+  scaleLabel.className = "field-label";
+  scaleLabel.textContent = "Scale";
+  const scaleSelect = document.createElement("select");
+  scaleSelect.className = "field-select";
+  [100, 75, 50, 25].forEach(v => {
+    const opt = document.createElement("option");
+    opt.value = String(v);
+    opt.textContent = `${v}%`;
+    scaleSelect.appendChild(opt);
+  });
+  const scaleCustomOpt = document.createElement("option");
+  scaleCustomOpt.value = "custom";
+  scaleCustomOpt.textContent = "Custom...";
+  scaleSelect.appendChild(scaleCustomOpt);
+  scaleSelect.value = String(state.scale);
+  const scaleCustom = document.createElement("input");
+  scaleCustom.type = "number";
+  scaleCustom.min = "1";
+  scaleCustom.max = "100";
+  scaleCustom.className = "field-select hidden";
+  scaleCustom.placeholder = "Custom %";
+  scaleGroup.appendChild(scaleLabel);
+  scaleGroup.appendChild(scaleSelect);
+  scaleGroup.appendChild(scaleCustom);
+  settings.appendChild(scaleGroup);
+
+  const sizeNote = document.createElement("div");
+  sizeNote.className = "next-note";
+  settings.appendChild(sizeNote);
+
+  // Bitrate
+  const brGroup = document.createElement("div");
+  brGroup.className = "field-group";
+  const brLabel = document.createElement("label");
+  brLabel.className = "field-label";
+  brLabel.textContent = "Bitrate (kbps)";
+  const brInput = document.createElement("input");
+  brInput.type = "number";
+  brInput.min = "500";
+  brInput.className = "field-select";
+  brInput.value = String(state.bitrate);
+  brGroup.appendChild(brLabel);
+  brGroup.appendChild(brInput);
+  settings.appendChild(brGroup);
+
+  const sourceNote = document.createElement("div");
+  sourceNote.className = "next-note";
+  sourceNote.textContent = "Built from this layer's uploaded frames, JPEG is used when present.";
+  settings.appendChild(sourceNote);
+
+  function currentScale() {
+    return scaleSelect.value === "custom"
+      ? (parseFloat(scaleCustom.value) || 100)
+      : parseFloat(scaleSelect.value);
+  }
+
+  async function updateSizeNote() {
+    // Resolution is read off whichever frames this layer already has
+    // locally. Camera raw generally cannot be read for this, so the
+    // note just falls back to showing the percentage.
+    const framePaths = (layer.jpeg && layer.jpeg.paths && layer.jpeg.paths.length)
+      ? layer.jpeg.paths
+      : ((layer.raw && layer.raw.paths) || []);
+
+    const scale = currentScale();
+    if (!framePaths.length) {
+      sizeNote.textContent = `Output scale: ${scale}% (add frames below to see the final size)`;
+      return;
+    }
+    try {
+      const info = await window.pywebview.api.inspect_local_frames(framePaths);
+      if (info.ok) {
+        const w = Math.round(info.width * (scale / 100));
+        const h = Math.round(info.height * (scale / 100));
+        sizeNote.textContent = `Output size: ${w}x${h} (${scale}% of ${info.width}x${info.height})`;
+      } else {
+        sizeNote.textContent = `Output scale: ${scale}% (final size shown after upload)`;
+      }
+    } catch (e) {
+      sizeNote.textContent = `Output scale: ${scale}%`;
+    }
+  }
+
+  function applyMode() {
+    const on = toggle.checked;
+    state.makeFromFrames = on;
+    // One or the other, never both, the section produces a single mp4.
+    zone.classList.toggle("hidden", on);
+    listEl.classList.toggle("hidden", on);
+    settings.classList.toggle("hidden", !on);
+    if (on) {
+      state.path = null;
+      updateSizeNote();
+    }
+    refreshUploadButtonState();
+  }
+
+  toggle.addEventListener("change", applyMode);
+
+  fpsSelect.addEventListener("change", () => {
+    fpsCustom.classList.toggle("hidden", fpsSelect.value !== "custom");
+    state.framerate = fpsSelect.value === "custom"
+      ? (parseFloat(fpsCustom.value) || 12)
+      : parseFloat(fpsSelect.value);
+  });
+  fpsCustom.addEventListener("input", () => {
+    state.framerate = parseFloat(fpsCustom.value) || 12;
+  });
+
+  scaleSelect.addEventListener("change", () => {
+    scaleCustom.classList.toggle("hidden", scaleSelect.value !== "custom");
+    state.scale = currentScale();
+    updateSizeNote();
+  });
+  scaleCustom.addEventListener("input", () => {
+    state.scale = currentScale();
+    updateSizeNote();
+  });
+
+  brInput.addEventListener("input", () => {
+    state.bitrate = parseInt(brInput.value, 10) || 8000;
+  });
+
+  applyMode();
+  return block;
 }
 
 function buildMultiFileSection(layer, key, title) {
@@ -1569,7 +1793,14 @@ uploadButton.addEventListener("click", async () => {
     const result = await window.pywebview.api.upload_layer_publish({
       shot_parts: shotParts,
       base_name: baseName,
-      mp4: { enabled: layer.mp4.enabled, path: layer.mp4.path },
+      mp4: {
+        enabled: layer.mp4.enabled,
+        path: layer.mp4.path,
+        make_from_frames: layer.mp4.makeFromFrames,
+        framerate: layer.mp4.framerate,
+        scale: layer.mp4.scale,
+        bitrate: layer.mp4.bitrate,
+      },
       raw: { enabled: layer.raw.enabled, paths: layer.raw.paths, handle_front: sharedFrameSettings.handleFront },
       jpeg: { enabled: layer.jpeg.enabled, paths: layer.jpeg.paths, handle_front: sharedFrameSettings.handleFront },
       production_data: { enabled: layer.productionData.enabled, paths: layer.productionData.paths },
@@ -2444,15 +2675,8 @@ const ffmpegOutputFolderPathBar = createPathBar(
   }
 );
 
-ffmpegBrowseZone.addEventListener("click", async () => {
-  const result = await window.pywebview.api.browse_folder();
-  if (!result.ok) {
-    addFfmpegStatusLine(`Could not open the folder browser: ${result.detail}`, "fail");
-    return;
-  }
-  if (!result.path) return; // cancelled
-
-  const resolved = await window.pywebview.api.resolve_path_to_parts(result.path, true);
+async function useFfmpegPath(absolutePath) {
+  const resolved = await window.pywebview.api.resolve_path_to_parts(absolutePath, true);
   if (!resolved.ok) {
     ffmpegPathError.textContent = resolved.detail;
     return;
@@ -2465,6 +2689,30 @@ ffmpegBrowseZone.addEventListener("click", async () => {
 
   const name = resolved.parts[resolved.parts.length - 1] || "selected";
   await selectFfmpegFolder(resolved.parts, name);
+}
+
+ffmpegBrowseZone.addEventListener("click", async () => {
+  const result = await window.pywebview.api.browse_folder();
+  if (!result.ok) {
+    addFfmpegStatusLine(`Could not open the folder browser: ${result.detail}`, "fail");
+    return;
+  }
+  if (!result.path) return; // cancelled
+  await useFfmpegPath(result.path);
+});
+
+// Dropping a frame file works as well as dropping the folder itself,
+// resolve_path_to_parts rejects a file, so fall back to its folder.
+registerDropTarget(ffmpegBrowseZone, async (paths) => {
+  const dropped = paths[0];
+  if (!dropped) return;
+  const resolved = await window.pywebview.api.resolve_path_to_parts(dropped, true);
+  if (resolved.ok) {
+    await useFfmpegPath(dropped);
+  } else {
+    const parentFolder = dropped.replace(/[\\/][^\\/]*$/, "");
+    await useFfmpegPath(parentFolder);
+  }
 });
 
 // ---------------------------------------------------------------
@@ -2497,6 +2745,11 @@ const connectionMenuItems = document.getElementById("connection-menu-items");
 const SOFTWARE_ICONS = {
   after_effects: "https://www.adobe.com/cc-shared/assets/img/product-icons/svg/after-effects-40.svg",
 };
+
+// Demo tiles use an inline shape rather than a remote icon, they only
+// exist to preview the tile states while Debug is open.
+const DEMO_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 12h8"/><path d="M12 8v8"/></svg>';
+const DEMO_SOFTWARE_IDS = ["demo_software", "demo_software_missing"];
 
 const CHAIN_OK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>';
 const CHAIN_BROKEN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 0 1 0 10h-2"/><path d="M8 12h3"/><path d="M13 12h3"/><path d="M3 3l18 18"/></svg>';
@@ -2554,7 +2807,7 @@ function makeMenuItem(label, subLabel, onClick, danger) {
 async function refreshSoftwareSection() {
   try {
     const [scan, conns] = await Promise.all([
-      window.pywebview.api.scan_installed_software(),
+      window.pywebview.api.scan_installed_software(debugToggle.checked),
       window.pywebview.api.get_software_connections(),
     ]);
     softwareCatalog = scan.ok ? scan.software : {};
@@ -2594,6 +2847,8 @@ function renderConnectTiles() {
       img.src = iconUrl;
       img.alt = info.label;
       iconWrap.appendChild(img);
+    } else if (DEMO_SOFTWARE_IDS.includes(softwareId)) {
+      iconWrap.innerHTML = DEMO_ICON_SVG;
     }
     tile.appendChild(iconWrap);
 
@@ -2690,6 +2945,8 @@ function renderConnectedTiles() {
       img.src = iconUrl;
       img.alt = record.label;
       iconWrap.appendChild(img);
+    } else if (DEMO_SOFTWARE_IDS.includes(record.software_id)) {
+      iconWrap.innerHTML = DEMO_ICON_SVG;
     }
     tile.appendChild(iconWrap);
 
