@@ -2861,7 +2861,13 @@ async function doConnect(softwareId, install) {
     return;
   }
   await refreshSoftwareSection();
-  showToast("Connected", 2500);
+  // The plugin install can partly fail while the connection itself
+  // succeeds, so say which happened rather than a blanket "Connected".
+  if (result.warning) {
+    showToast(`Connected, but the plugin did not install: ${result.warning}`, 7000);
+  } else {
+    showToast(result.detail || "Connected", 5000);
+  }
 }
 
 function renderConnectedTiles() {
@@ -2941,7 +2947,7 @@ function openConnectionMenu(key, record, anchorEl) {
         closeAllPopups();
         const result = await window.pywebview.api.repair_software_connection(key);
         if (result.ok) {
-          showToast(`Repaired, now pointing at ${result.version}`, 3500);
+          showToast(result.detail || `Repaired, now pointing at ${result.version}`, 5000);
         } else {
           showToast(result.detail, 5000);
         }
@@ -2982,7 +2988,11 @@ function openConnectionMenu(key, record, anchorEl) {
         return;
       }
       await refreshSoftwareSection();
-      showToast("Connection removed", 2500);
+      if (result.warning) {
+        showToast(`Connection removed, but the plugin file could not be deleted: ${result.warning}`, 7000);
+      } else {
+        showToast(result.detail || "Connection removed", 3500);
+      }
     }, true)
   );
 

@@ -416,6 +416,101 @@ _DEMO_UNDETECTED = {
 }
 
 
+# ------------------------------------------------------------
+# Plugin install.
+#
+# The After Effects panel is fetched straight from its own repository
+# at connect time, so whatever is on main is what gets installed and
+# there is nothing to bundle or keep in sync here.
+#
+# It installs as a ScriptUI panel into the artist's own Documents
+# folder rather than as a CEP extension. That means no administrator
+# rights and no registry changes: an unsigned CEP extension needs the
+# PlayerDebugMode flag set before After Effects will load it, which is
+# more moving parts than this needs.
+# ------------------------------------------------------------
+
+_AE_PLUGIN_RAW_BASE = "https://raw.githubusercontent.com/projectMataNuiRising/mnrLauncher-afterEffects/main"
+_AE_PLUGIN_FILENAME = "MNR_Launcher_Panel.jsx"
+_AE_PLUGIN_SOURCE = f"{_AE_PLUGIN_RAW_BASE}/src/{_AE_PLUGIN_FILENAME}"
+_AE_PLUGIN_MANIFEST = f"{_AE_PLUGIN_RAW_BASE}/build/plugin.json"
+
+
+def _ae_scriptui_folder(version):
+    """
+    Per-user ScriptUI Panels folder for a given After Effects version.
+    Writable without elevation, unlike the copy inside Program Files.
+    """
+    documents = os.path.join(os.path.expanduser("~"), "Documents")
+    return os.path.join(documents, "Adobe", f"After Effects {version}", "Scripts", "ScriptUI Panels")
+
+
+def _ae_plugin_path(version):
+    return os.path.join(_ae_scriptui_folder(version), _AE_PLUGIN_FILENAME)
+
+
+def _fetch_plugin_version():
+    """Reads the version out of the plugin's own manifest, best effort."""
+    try:
+        with urllib.request.urlopen(_AE_PLUGIN_MANIFEST, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data.get("version")
+    except Exception:
+        return None
+
+
+def install_ae_plugin(version):
+    """
+    Downloads the panel and writes it into the per-user ScriptUI
+    Panels folder for this After Effects version, creating the folder
+    if the artist has never installed a script before.
+    """
+    try:
+        with urllib.request.urlopen(_AE_PLUGIN_SOURCE, timeout=20) as resp:
+            source = resp.read()
+    except Exception as e:
+        return {"ok": False, "detail": f"Could not download the plugin: {e}"}
+
+    if not source.strip():
+        return {"ok": False, "detail": "Downloaded plugin file was empty"}
+
+    target_folder = _ae_scriptui_folder(version)
+    target_path = os.path.join(target_folder, _AE_PLUGIN_FILENAME)
+
+    try:
+        os.makedirs(target_folder, exist_ok=True)
+        with open(target_path, "wb") as f:
+            f.write(source)
+    except PermissionError:
+        return {"ok": False, "detail": f"No permission to write to {target_folder}"}
+    except Exception as e:
+        return {"ok": False, "detail": f"Could not write the plugin: {e}"}
+
+    plugin_version = _fetch_plugin_version()
+    _log(f"install_ae_plugin: {target_path} (v{plugin_version})")
+    return {"ok": True, "path": target_path, "plugin_version": plugin_version}
+
+
+def uninstall_ae_plugin(version):
+    """
+    Removes the panel again. Reports success when the file is already
+    gone, since the end state is what matters.
+    """
+    target_path = _ae_plugin_path(version)
+    if not os.path.isfile(target_path):
+        return {"ok": True, "detail": "Plugin was not installed"}
+    try:
+        os.remove(target_path)
+        _log(f"uninstall_ae_plugin: removed {target_path}")
+        return {"ok": True, "detail": "Plugin removed"}
+    except Exception as e:
+        return {"ok": False, "detail": f"Could not remove the plugin: {e}"}
+
+
+def ae_plugin_is_installed(version):
+    return os.path.isfile(_ae_plugin_path(version))
+
+
 def _version_from_folder_name(folder_name, prefix):
     """
     "Adobe After Effects 2024" -> "2024", "Adobe After Effects CC 2019"
@@ -521,6 +616,14 @@ def _connection_health(record):
     exe_path = record.get("exe_path") or ""
     if not exe_path or not os.path.isfile(exe_path):
         return {"ok": False, "reason": "The software is no longer at the path it was connected from"}
+
+    # A connection is only healthy if the plugin is actually still on
+    # disk. An artist can delete it by hand, or an AE update can wipe
+    # the scripts folder, and the tile should show that.
+    if record.get("software_id") == "after_effects":
+        if not ae_plugin_is_installed(record.get("version")):
+            return {"ok": False, "reason": "The plugin is missing from After Effects, use Repair to reinstall it"}
+
     return {"ok": True, "reason": ""}
 
 
@@ -1880,6 +1983,18 @@ class MnrApi:
         }
         write_connections(connections)
         _log(f"connect_software: {key} -> {exe_path}")
+
+        # Install the plugin itself. A failure here is reported back but
+        # the connection is kept, so the tile shows with a red chain and
+        # a Repair option rather than the whole thing silently failing.
+        if software_id == "after_effects":
+            install = install_ae_plugin(version)
+            if install["ok"]:
+                connections[key]["plugin_version"] = install.get("plugin_version")
+                write_connections(connections)
+                return {"ok": True, "key": key, "detail": "Plugin installed, restart After Effects to see it"}
+            return {"ok": True, "key": key, "warning": install["detail"]}
+
         return {"ok": True, "key": key}
 
     def disconnect_software(self, key):
@@ -1889,7 +2004,17 @@ class MnrApi:
         removed = connections.pop(key)
         write_connections(connections)
         _log(f"disconnect_software: {key}")
-        return {"ok": True, "label": removed.get("label", "")}
+
+        # Take the plugin back off disk as well, otherwise removing the
+        # tile would leave the panel behind in After Effects.
+        detail = ""
+        if removed.get("software_id") == "after_effects" and not removed.get("demo"):
+            result = uninstall_ae_plugin(removed.get("version"))
+            detail = result.get("detail", "")
+            if not result["ok"]:
+                return {"ok": True, "label": removed.get("label", ""), "warning": detail}
+
+        return {"ok": True, "label": removed.get("label", ""), "detail": detail}
 
     def repair_software_connection(self, key):
         """
@@ -1919,6 +2044,18 @@ class MnrApi:
         connections[key] = record
         write_connections(connections)
         _log(f"repair_software_connection: {key} -> {match['exe_path']}")
+
+        # Repair also means putting the plugin back, that is usually the
+        # actual thing that went wrong.
+        if record.get("software_id") == "after_effects":
+            install = install_ae_plugin(match["version"])
+            if not install["ok"]:
+                return {"ok": False, "detail": install["detail"]}
+            record["plugin_version"] = install.get("plugin_version")
+            connections[key] = record
+            write_connections(connections)
+            return {"ok": True, "version": match["version"], "detail": "Plugin reinstalled, restart After Effects"}
+
         return {"ok": True, "version": match["version"]}
 
     def launch_connected_software(self, key):
