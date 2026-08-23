@@ -2086,9 +2086,9 @@ def main():
         APP_NAME,
         _resolve_index_html(),
         js_api=api,
-        width=1100,
-        height=750,
-        min_size=(900, 600),
+        width=1250,
+        height=980,
+        min_size=(1000, 700),
     )
     webview.start(_bind_dom_events, window)
 
