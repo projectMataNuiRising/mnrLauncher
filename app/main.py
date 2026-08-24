@@ -623,16 +623,46 @@ def _run_elevated_script(body, timeout_seconds=120):
     only one level of quoting, so it cannot come apart that way.
     """
     script_path = os.path.join(tempfile.gettempdir(), "mnr_ae_plugin_step.ps1")
+    log_path = os.path.join(tempfile.gettempdir(), "mnr_ae_plugin_step.log")
+
+    # Clear any log from a previous attempt so a stale error cannot be
+    # mistaken for a fresh one.
+    try:
+        if os.path.isfile(log_path):
+            os.remove(log_path)
+    except Exception:
+        pass
+
     try:
         with open(script_path, "w", encoding="utf-8") as f:
             f.write("$ErrorActionPreference = 'Stop'\n")
+            # The elevated window is hidden, so without this any error
+            # is invisible and all we get back is a bare exit code.
+            f.write("try {\n")
             f.write(body)
-            f.write("\nexit 0\n")
+            f.write("} catch {\n")
+            f.write(f"  $_.Exception.Message | Out-File -FilePath {_ps_quote(log_path)} -Encoding utf8\n")
+            f.write("  exit 1\n")
+            f.write("}\n")
+            f.write("exit 0\n")
     except Exception as e:
         return False, f"Could not write the elevated step: {e}"
 
     args = f'-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{script_path}"'
-    return _run_elevated_and_wait("powershell.exe", args, timeout_seconds)
+    ok, detail = _run_elevated_and_wait("powershell.exe", args, timeout_seconds)
+
+    if not ok:
+        # Prefer the real error message over the generic exit code.
+        try:
+            if os.path.isfile(log_path):
+                message = open(log_path, "r", encoding="utf-8", errors="replace").read().strip()
+                if message:
+                    _log(f"elevated step error: {message}")
+                    return False, message
+        except Exception:
+            pass
+
+    return ok, detail
 
 
 def install_ae_plugin_elevated(install_dir):
@@ -664,9 +694,13 @@ def install_ae_plugin_elevated(install_dir):
     target_folder = _ae_system_scriptui_folder(install_dir)
     target_path = os.path.join(target_folder, _AE_PLUGIN_FILENAME)
 
+    # .NET methods rather than New-Item/Copy-Item: cmdlet parameters
+    # differ between PowerShell versions (New-Item has no -LiteralPath
+    # in Windows PowerShell 5.1, for instance), while these calls behave
+    # identically everywhere and take paths exactly as given.
     body = (
-        f"New-Item -ItemType Directory -Force -LiteralPath {_ps_quote(target_folder)} | Out-Null\n"
-        f"Copy-Item -LiteralPath {_ps_quote(temp_path)} -Destination {_ps_quote(target_path)} -Force\n"
+        f"[System.IO.Directory]::CreateDirectory({_ps_quote(target_folder)}) | Out-Null\n"
+        f"[System.IO.File]::Copy({_ps_quote(temp_path)}, {_ps_quote(target_path)}, $true)\n"
     )
 
     ok, detail = _run_elevated_script(body)
@@ -686,7 +720,7 @@ def uninstall_ae_plugin_elevated(install_dir):
     if not os.path.isfile(target_path):
         return {"ok": True, "detail": "Plugin was not installed there"}
 
-    body = f"Remove-Item -LiteralPath {_ps_quote(target_path)} -Force\n"
+    body = f"[System.IO.File]::Delete({_ps_quote(target_path)})\n"
 
     ok, detail = _run_elevated_script(body)
     if not ok:
