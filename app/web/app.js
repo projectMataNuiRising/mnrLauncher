@@ -2879,6 +2879,7 @@ async function doConnect(softwareId, install) {
     showToast(`Connected, but the plugin did not install: ${result.warning}`, 7000);
   } else {
     showToast(result.detail || "Connected", 5000);
+    if (result.path) console.log("Plugin installed to:", result.path);
   }
 }
 
@@ -2967,6 +2968,17 @@ function openConnectionMenu(key, record, anchorEl) {
       })
     );
   }
+
+  // Second install location, needed on machines where After Effects
+  // does not read the per-user scripts folder.
+  connectionMenuItems.appendChild(
+    makeMenuItem("Install plugin to the AE folder", "Use if the panel is not showing up (needs admin)", async () => {
+      closeAllPopups();
+      const result = await window.pywebview.api.install_plugin_to_install_folder(key);
+      showToast(result.ok ? result.detail : result.detail, result.ok ? 6000 : 9000);
+      await refreshSoftwareSection();
+    })
+  );
 
   connectionMenuItems.appendChild(
     makeMenuItem("Open install folder", record.install_dir, async () => {

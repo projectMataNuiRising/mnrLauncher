@@ -437,17 +437,51 @@ _AE_PLUGIN_SOURCE = f"{_AE_PLUGIN_RAW_BASE}/src/{_AE_PLUGIN_FILENAME}"
 _AE_PLUGIN_MANIFEST = f"{_AE_PLUGIN_RAW_BASE}/build/plugin.json"
 
 
+def _ae_user_scripts_root():
+    appdata = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Roaming")
+    return os.path.join(appdata, "Adobe", "After Effects")
+
+
 def _ae_scriptui_folder(version):
+    r"""
+    Per-user ScriptUI Panels folder, writable without elevation:
+
+        %APPDATA%\Adobe\After Effects\<app version>\Scripts\ScriptUI Panels
+
+    Note this is keyed on the app version (26.3), not the release year.
+    The Documents\Adobe\After Effects <year> folder is only ever read
+    for user presets, After Effects does not look there for scripts.
+
+    The exact folder name After Effects uses varies (it may be "26.0"
+    even while the app reports 26.3), so rather than assume, this looks
+    at what After Effects actually created and matches on the major
+    version, only falling back to a guess if nothing is there yet.
     """
-    Per-user ScriptUI Panels folder for a given After Effects version.
-    Writable without elevation, unlike the copy inside Program Files.
-    """
-    documents = os.path.join(os.path.expanduser("~"), "Documents")
-    return os.path.join(documents, "Adobe", f"After Effects {version}", "Scripts", "ScriptUI Panels")
+    base = _ae_user_scripts_root()
+    major = str(version).split(".")[0]
+
+    match = None
+    for name in (_safe_listdir(base) or []):
+        if not os.path.isdir(os.path.join(base, name)):
+            continue
+        if name.split(".")[0] == major:
+            match = name
+            break
+
+    folder = match or f"{major}.0"
+    return os.path.join(base, folder, "Scripts", "ScriptUI Panels")
 
 
 def _ae_plugin_path(version):
     return os.path.join(_ae_scriptui_folder(version), _AE_PLUGIN_FILENAME)
+
+
+def _ae_system_scriptui_folder(install_dir):
+    """
+    The all-users location inside the install itself. Needs admin, so
+    it is only a fallback for when the per-user folder does not work.
+    """
+    return os.path.join(install_dir, "Support Files", "Scripts", "ScriptUI Panels")
 
 
 def _fetch_plugin_version():
@@ -492,24 +526,83 @@ def install_ae_plugin(version):
     return {"ok": True, "path": target_path, "plugin_version": plugin_version}
 
 
-def uninstall_ae_plugin(version):
+def install_ae_plugin_system(install_dir):
     """
-    Removes the panel again. Reports success when the file is already
-    gone, since the end state is what matters.
+    Fallback that writes into the install folder itself, which every
+    version of After Effects definitely reads. Needs administrator
+    rights, so it is only offered if the per-user location did not
+    work on this machine.
     """
-    target_path = _ae_plugin_path(version)
-    if not os.path.isfile(target_path):
-        return {"ok": True, "detail": "Plugin was not installed"}
     try:
-        os.remove(target_path)
-        _log(f"uninstall_ae_plugin: removed {target_path}")
-        return {"ok": True, "detail": "Plugin removed"}
+        with urllib.request.urlopen(_AE_PLUGIN_SOURCE, timeout=20) as resp:
+            source = resp.read()
     except Exception as e:
-        return {"ok": False, "detail": f"Could not remove the plugin: {e}"}
+        return {"ok": False, "detail": f"Could not download the plugin: {e}"}
+
+    target_folder = _ae_system_scriptui_folder(install_dir)
+    target_path = os.path.join(target_folder, _AE_PLUGIN_FILENAME)
+
+    try:
+        os.makedirs(target_folder, exist_ok=True)
+        with open(target_path, "wb") as f:
+            f.write(source)
+    except PermissionError:
+        return {
+            "ok": False,
+            "detail": "Needs administrator rights. Close the launcher, right click it and choose Run as administrator, then repair the connection.",
+        }
+    except Exception as e:
+        return {"ok": False, "detail": f"Could not write the plugin: {e}"}
+
+    _log(f"install_ae_plugin_system: {target_path}")
+    return {"ok": True, "path": target_path, "plugin_version": _fetch_plugin_version()}
 
 
-def ae_plugin_is_installed(version):
-    return os.path.isfile(_ae_plugin_path(version))
+def _ae_plugin_locations(version, install_dir=None, year=None):
+    """Every place the panel might be, user location first."""
+    spots = [_ae_plugin_path(version)]
+    if install_dir:
+        spots.append(os.path.join(_ae_system_scriptui_folder(install_dir), _AE_PLUGIN_FILENAME))
+    # An earlier build wrote to the Documents folder, which After
+    # Effects never actually reads. Clean that up if it is still there
+    # so removing a connection does not leave a stray file behind.
+    if year:
+        documents = os.path.join(os.path.expanduser("~"), "Documents")
+        spots.append(os.path.join(
+            documents, "Adobe", f"After Effects {year}",
+            "Scripts", "ScriptUI Panels", _AE_PLUGIN_FILENAME))
+    return spots
+
+
+def uninstall_ae_plugin(version, install_dir=None, year=None):
+    """
+    Removes the panel from wherever it ended up, since it may have
+    been installed to the per-user folder or to the install itself.
+    Reports success when nothing was there, the end state is what
+    matters.
+    """
+    removed = []
+    problems = []
+
+    for path in _ae_plugin_locations(version, install_dir, year):
+        if not os.path.isfile(path):
+            continue
+        try:
+            os.remove(path)
+            removed.append(path)
+            _log(f"uninstall_ae_plugin: removed {path}")
+        except Exception as e:
+            problems.append(f"{path}: {e}")
+
+    if problems:
+        return {"ok": False, "detail": "Could not remove the plugin from " + "; ".join(problems)}
+    if not removed:
+        return {"ok": True, "detail": "Plugin was not installed"}
+    return {"ok": True, "detail": "Plugin removed"}
+
+
+def ae_plugin_is_installed(version, install_dir=None):
+    return any(os.path.isfile(p) for p in _ae_plugin_locations(version, install_dir))
 
 
 def _version_from_folder_name(folder_name, prefix):
@@ -694,7 +787,7 @@ def _connection_health(record):
     # disk. An artist can delete it by hand, or an AE update can wipe
     # the scripts folder, and the tile should show that.
     if record.get("software_id") == "after_effects":
-        if not ae_plugin_is_installed(record.get("year") or record.get("version")):
+        if not ae_plugin_is_installed(record.get("version"), record.get("install_dir")):
             return {"ok": False, "reason": "The plugin is missing from After Effects, use Repair to reinstall it"}
 
     return {"ok": True, "reason": ""}
@@ -2090,11 +2183,16 @@ class MnrApi:
         # the connection is kept, so the tile shows with a red chain and
         # a Repair option rather than the whole thing silently failing.
         if software_id == "after_effects":
-            install = install_ae_plugin(connections[key]["year"])
+            install = install_ae_plugin(version)
             if install["ok"]:
                 connections[key]["plugin_version"] = install.get("plugin_version")
+                connections[key]["plugin_path"] = install.get("path")
                 write_connections(connections)
-                return {"ok": True, "key": key, "detail": "Plugin installed, restart After Effects to see it"}
+                return {
+                    "ok": True, "key": key,
+                    "detail": "Plugin installed, restart After Effects to see it",
+                    "path": install.get("path"),
+                }
             return {"ok": True, "key": key, "warning": install["detail"]}
 
         return {"ok": True, "key": key}
@@ -2111,7 +2209,7 @@ class MnrApi:
         # tile would leave the panel behind in After Effects.
         detail = ""
         if removed.get("software_id") == "after_effects" and not removed.get("demo"):
-            result = uninstall_ae_plugin(removed.get("year") or removed.get("version"))
+            result = uninstall_ae_plugin(removed.get("version"), removed.get("install_dir"), removed.get("year"))
             detail = result.get("detail", "")
             if not result["ok"]:
                 return {"ok": True, "label": removed.get("label", ""), "warning": detail}
@@ -2151,7 +2249,7 @@ class MnrApi:
         # actual thing that went wrong.
         if record.get("software_id") == "after_effects":
             record["year"] = match.get("year") or match["version"]
-            install = install_ae_plugin(record["year"])
+            install = install_ae_plugin(match["version"])
             if not install["ok"]:
                 return {"ok": False, "detail": install["detail"]}
             record["plugin_version"] = install.get("plugin_version")
@@ -2160,6 +2258,34 @@ class MnrApi:
             return {"ok": True, "version": match["version"], "detail": "Plugin reinstalled, restart After Effects"}
 
         return {"ok": True, "version": match["version"]}
+
+    def install_plugin_to_install_folder(self, key):
+        """
+        Second attempt at installing, into the After Effects install
+        folder itself. Every version reads that location, but it lives
+        under Program Files so it needs administrator rights. Offered
+        only when the per-user location did not work on this machine.
+        """
+        connections = read_connections()
+        record = connections.get(key)
+        if not record:
+            return {"ok": False, "detail": "That connection no longer exists"}
+        if record.get("demo"):
+            return {"ok": False, "detail": "This is a demo tile, there is nothing to install"}
+
+        install_dir = record.get("install_dir")
+        if not install_dir or not os.path.isdir(install_dir):
+            return {"ok": False, "detail": "Could not find the After Effects install folder"}
+
+        result = install_ae_plugin_system(install_dir)
+        if not result["ok"]:
+            return result
+
+        record["plugin_version"] = result.get("plugin_version")
+        record["plugin_path"] = result.get("path")
+        connections[key] = record
+        write_connections(connections)
+        return {"ok": True, "detail": "Plugin installed to the After Effects folder, restart After Effects", "path": result.get("path")}
 
     def launch_connected_software(self, key):
         connections = read_connections()
