@@ -65,26 +65,6 @@
     <div id="debug-log" class="debug-log"></div>
   </div>
 
-  <!-- Small version badge, bottom right, always present -->
-  <div id="version-badge" class="version-badge"></div>
-
-  <!-- Job drawer. Present on every screen, collapsed by default. The
-       bar along the bottom pops it open and closed. -->
-  <div id="job-drawer" class="job-drawer">
-    <button type="button" id="job-drawer-bar" class="job-drawer-bar">
-      <span class="job-drawer-arrow" id="job-drawer-arrow">&#9650;</span>
-      <span class="job-drawer-bar-label" id="job-drawer-bar-label">Jobs</span>
-      <span class="job-drawer-bar-status" id="job-drawer-bar-status"></span>
-    </button>
-    <div class="job-drawer-body hidden" id="job-drawer-body">
-      <div class="job-drawer-header">
-        <span>Local file placement into P:\ &mdash; not pCloud sync. Check the top bar for pCloud status.</span>
-        <button type="button" id="job-clear-button" class="small-button">Clear finished</button>
-      </div>
-      <div id="job-list" class="job-list"></div>
-    </div>
-  </div>
-
   <!-- Brief in-app notice, e.g. "Launching Blender..." -->
   <div id="toast" class="toast hidden"></div>
 
@@ -562,6 +542,24 @@
         <div id="ffmpeg-tree-root" class="tree-root"></div>
       </div>
 
+    </div>
+  </div>
+
+  <div id="version-badge" class="version-badge"></div>
+  <!-- Job drawer. Present on every screen, collapsed by default. The
+       bar along the bottom pops it open and closed. -->
+  <div id="job-drawer" class="job-drawer">
+    <button type="button" id="job-drawer-bar" class="job-drawer-bar">
+      <span class="job-drawer-arrow" id="job-drawer-arrow">&#9650;</span>
+      <span class="job-drawer-bar-label" id="job-drawer-bar-label">Jobs</span>
+      <span class="job-drawer-bar-status" id="job-drawer-bar-status"></span>
+    </button>
+    <div class="job-drawer-body hidden" id="job-drawer-body">
+      <div class="job-drawer-header">
+        <span>Local file placement into P:\ &mdash; not pCloud sync. Check the top bar for pCloud status.</span>
+        <button type="button" id="job-clear-button" class="small-button">Clear finished</button>
+      </div>
+      <div id="job-list" class="job-list"></div>
     </div>
   </div>
 

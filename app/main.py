@@ -2669,6 +2669,34 @@ class MnrApi:
         _log(f"submit_archive_job: {job['id']} {label}")
         return {"ok": True, "job_id": job["id"]}
 
+    def grow_window_for_drawer(self, extra_height):
+        """
+        Grows the window when the job drawer opens so the drawer adds
+        space rather than squeezing the page, and shrinks it back when
+        the drawer closes. Refuses to grow past the screen, in which
+        case the drawer just shares the existing space instead.
+        """
+        try:
+            window = webview.windows[0]
+            target = window.height + int(extra_height)
+
+            if int(extra_height) > 0:
+                try:
+                    import ctypes
+                    screen_height = ctypes.windll.user32.GetSystemMetrics(1)
+                except Exception:
+                    screen_height = 0
+                if screen_height and target > screen_height - 60:
+                    return {"ok": True, "resized": False}
+
+            window.resize(window.width, max(target, 400))
+            return {"ok": True, "resized": True}
+        except Exception as e:
+            # Not being able to resize is not worth failing over, the
+            # drawer still works, it just shares the space.
+            _log(f"grow_window_for_drawer skipped: {e}")
+            return {"ok": True, "resized": False}
+
     def get_jobs(self):
         with _JOBS_LOCK:
             jobs = [_job_public_view(j) for j in _JOBS]

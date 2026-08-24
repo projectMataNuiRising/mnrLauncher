@@ -3046,10 +3046,17 @@ let jobDrawerOpen = false;
 let jobPollInterval = null;
 let lastActiveJobCount = 0;
 
+const JOB_DRAWER_HEIGHT = 260;
+
 function setJobDrawerOpen(open) {
+  if (open === jobDrawerOpen) return;
   jobDrawerOpen = open;
   jobDrawer.classList.toggle("open", open);
   jobDrawerBody.classList.toggle("hidden", !open);
+  // Grow the window by the drawer's height so it adds space instead
+  // of squeezing the page. Falls back to sharing the space if the
+  // window is already near the bottom of the screen.
+  window.pywebview.api.grow_window_for_drawer(open ? JOB_DRAWER_HEIGHT : -JOB_DRAWER_HEIGHT);
 }
 
 jobDrawerBar.addEventListener("click", () => setJobDrawerOpen(!jobDrawerOpen));
