@@ -2014,14 +2014,33 @@ class MnrApi:
         Every existing connection plus a live health check on each, so
         the home screen can colour each tile's chain icon without a
         second round trip.
+
+        Also re-reads the real version off disk. Adobe installs minor
+        updates in place (26.2 becomes 26.3 in the same folder, same
+        exe), so without this the tile would keep showing whatever
+        version was current on the day it was connected, forever.
         """
         connections = read_connections()
+        changed = False
         out = {}
+
         for key, record in connections.items():
+            exe_path = record.get("exe_path") or ""
+            if not record.get("demo") and exe_path and os.path.isfile(exe_path):
+                current = _exe_file_version(exe_path)
+                if current and current != record.get("version"):
+                    _log(f"connection {key}: version moved {record.get('version')} -> {current}")
+                    record["version"] = current
+                    changed = True
+
             health = _connection_health(record)
             out[key] = dict(record)
             out[key]["healthy"] = health["ok"]
             out[key]["problem"] = health["reason"]
+
+        if changed:
+            write_connections(connections)
+
         return {"ok": True, "connections": out}
 
     def connect_software(self, software_id, install):

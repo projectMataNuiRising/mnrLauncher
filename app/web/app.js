@@ -2769,10 +2769,17 @@ function renderConnectTiles() {
     // live in the Launch grid now. If every detected version is
     // connected, the tile still shows so another copy can be added
     // manually.
-    const connectedVersions = Object.values(softwareConnections)
+    // Match on the executable path, not the version string. Adobe
+    // updates minor versions in place (26.2 becomes 26.3 in the same
+    // folder), so comparing versions would make an already-connected
+    // install look like a brand new one and allow a duplicate tile
+    // for the same copy of the software.
+    const connectedExes = Object.values(softwareConnections)
       .filter(c => c.software_id === softwareId)
-      .map(c => c.version);
-    const available = info.installs.filter(i => !connectedVersions.includes(i.version));
+      .map(c => (c.exe_path || "").toLowerCase());
+    const available = info.installs.filter(
+      i => !connectedExes.includes((i.exe_path || "").toLowerCase())
+    );
 
     const tile = document.createElement("button");
     tile.type = "button";
