@@ -319,6 +319,7 @@ async function runBoot() {
   refreshFfmpegTile();
   refreshSoftwareSection();
   refreshJobs();
+  checkPluginUpdates();
 
   const savedUser = await window.pywebview.api.get_saved_user();
   if (savedUser && allUsers.includes(savedUser)) {
@@ -2972,6 +2973,16 @@ function openConnectionMenu(key, record, anchorEl) {
   // Second install location, needed on machines where After Effects
   // does not read the per-user scripts folder.
   connectionMenuItems.appendChild(
+    makeMenuItem("Update plugin", "Installs the published version, asks for administrator access", async () => {
+      closeAllPopups();
+      const result = await window.pywebview.api.update_plugin(key);
+      showToast(result.detail, result.ok ? 6000 : 9000);
+      await refreshSoftwareSection();
+      await checkPluginUpdates();
+    })
+  );
+
+  connectionMenuItems.appendChild(
     makeMenuItem("Reinstall plugin", "Asks for administrator access", async () => {
       closeAllPopups();
       const result = await window.pywebview.api.install_plugin_to_install_folder(key);
@@ -3243,4 +3254,81 @@ async function submitJobAndShow(submitPromise) {
   await refreshJobs();
   setJobDrawerOpen(true);
   return true;
+}
+
+// ---------------------------------------------------------------
+// Plugin updates.
+//
+// Checked once on launch. The installed version is read out of the
+// panel file itself rather than from anything we recorded, so a panel
+// replaced by hand or left over from an older build is still spotted.
+//
+// Updating writes into the After Effects folder, so Windows asks for
+// permission. The notice says so before the prompt appears, since an
+// unexplained UAC dialog is alarming.
+// ---------------------------------------------------------------
+
+const pluginUpdateNotice = document.getElementById("plugin-update-notice");
+const pluginUpdateTitle = document.getElementById("plugin-update-title");
+const pluginUpdateSub = document.getElementById("plugin-update-sub");
+const pluginUpdateButton = document.getElementById("plugin-update-button");
+const pluginUpdateLater = document.getElementById("plugin-update-later");
+
+let pendingPluginUpdates = [];
+
+pluginUpdateLater.addEventListener("click", () => {
+  pluginUpdateNotice.classList.add("hidden");
+});
+
+pluginUpdateButton.addEventListener("click", async () => {
+  pluginUpdateButton.disabled = true;
+  pluginUpdateButton.textContent = "Updating...";
+
+  const failures = [];
+  for (const update of pendingPluginUpdates) {
+    const result = await window.pywebview.api.update_plugin(update.key);
+    if (!result.ok) failures.push(`${update.label} ${update.version}: ${result.detail}`);
+  }
+
+  pluginUpdateButton.disabled = false;
+  pluginUpdateButton.textContent = "Update now";
+
+  if (failures.length) {
+    showToast(failures.join(" | "), 9000);
+    // Leave the notice up, the update genuinely did not happen.
+    return;
+  }
+
+  pluginUpdateNotice.classList.add("hidden");
+  pendingPluginUpdates = [];
+  showToast("Plugin updated, restart After Effects to pick it up", 6000);
+  await refreshSoftwareSection();
+});
+
+async function checkPluginUpdates() {
+  try {
+    const result = await window.pywebview.api.check_plugin_updates();
+    if (!result.ok || !result.updates || result.updates.length === 0) {
+      pluginUpdateNotice.classList.add("hidden");
+      pendingPluginUpdates = [];
+      return;
+    }
+
+    pendingPluginUpdates = result.updates;
+
+    const first = result.updates[0];
+    if (result.updates.length === 1) {
+      pluginUpdateTitle.textContent = `Plugin update available (v${first.latest})`;
+      pluginUpdateSub.textContent =
+        `${first.label} ${first.version} has v${first.installed}. Windows will ask for permission to update it.`;
+    } else {
+      pluginUpdateTitle.textContent = `Plugin updates available (v${first.latest})`;
+      pluginUpdateSub.textContent =
+        `${result.updates.length} connections are out of date. Windows will ask for permission to update them.`;
+    }
+
+    pluginUpdateNotice.classList.remove("hidden");
+  } catch (e) {
+    // Offline or the repo is unreachable, nothing worth interrupting for.
+  }
 }

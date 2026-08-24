@@ -65,6 +65,17 @@
     <div id="debug-log" class="debug-log"></div>
   </div>
 
+  <!-- Plugin update notice. Appears on launch when an installed panel
+       is behind what is published, so nobody quietly runs an old one. -->
+  <div id="plugin-update-notice" class="plugin-update-notice hidden">
+    <div class="plugin-update-text">
+      <div class="plugin-update-title" id="plugin-update-title">Plugin update available</div>
+      <div class="plugin-update-sub" id="plugin-update-sub"></div>
+    </div>
+    <button type="button" id="plugin-update-button" class="small-button plugin-update-button">Update now</button>
+    <button type="button" id="plugin-update-later" class="icon-only-button" title="Later">&times;</button>
+  </div>
+
   <!-- Brief in-app notice, e.g. "Launching Blender..." -->
   <div id="toast" class="toast hidden"></div>
 

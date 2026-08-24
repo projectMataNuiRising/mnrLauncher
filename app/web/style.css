@@ -1581,3 +1581,49 @@ body {
   color: var(--muted);
   padding: 10px 0;
 }
+
+/* ---------------- Plugin update notice ---------------- */
+
+.plugin-update-notice {
+  position: fixed;
+  top: 68px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 320;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: 560px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+}
+
+.plugin-update-notice.hidden { display: none; }
+
+.plugin-update-text { flex: 1; }
+
+.plugin-update-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+
+.plugin-update-sub {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.plugin-update-button {
+  flex-shrink: 0;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.plugin-update-button:hover {
+  background: var(--accent);
+  color: var(--panel);
+}

@@ -485,6 +485,49 @@ def _ae_system_scriptui_folder(install_dir):
     return os.path.join(install_dir, "Support Files", "Scripts", "ScriptUI Panels")
 
 
+_PLUGIN_VERSION_RE = re.compile(r'PLUGIN_VERSION\s*=\s*["\']([^"\']+)["\']')
+
+
+def _read_installed_plugin_version(install_dir):
+    """
+    Reads the version out of the installed panel itself rather than
+    trusting what we recorded when it was installed. The file on disk
+    is the truth: it can be replaced by hand, or left behind by an
+    older build, and the stored value would not know.
+    """
+    if not install_dir:
+        return None
+    path = os.path.join(_ae_system_scriptui_folder(install_dir), _AE_PLUGIN_FILENAME)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            # The version sits near the top, no need to read it all.
+            head = f.read(4000)
+        match = _PLUGIN_VERSION_RE.search(head)
+        return match.group(1) if match else None
+    except Exception:
+        return None
+
+
+def _version_tuple(version):
+    """
+    "0.10.2" -> (0, 10, 2) so versions compare numerically. Sorting
+    them as text would rank 0.9.0 above 0.10.0, since "9" beats "1".
+    """
+    parts = []
+    for chunk in str(version or "").split("."):
+        digits = "".join(c for c in chunk if c.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+def _plugin_update_available(installed, latest):
+    if not installed or not latest:
+        return False
+    return _version_tuple(latest) > _version_tuple(installed)
+
+
 def _fetch_plugin_version():
     """Reads the version out of the plugin's own manifest, best effort."""
     try:
@@ -964,6 +1007,15 @@ def _connection_health(record):
     if record.get("software_id") == "after_effects":
         if not ae_plugin_is_installed(record.get("version"), record.get("install_dir")):
             return {"ok": False, "reason": "The plugin is missing from After Effects, use Repair to reinstall it"}
+
+        # Deliberately no network call here, this runs on every render
+        # of the home screen. The launch-time update check does the
+        # comparison and records the result.
+        if record.get("plugin_outdated"):
+            return {
+                "ok": False,
+                "reason": f"The plugin is out of date (v{record.get('plugin_version')}), use Update plugin",
+            }
 
     return {"ok": True, "reason": ""}
 
@@ -2468,6 +2520,92 @@ class MnrApi:
         connections[key] = record
         write_connections(connections)
         return {"ok": True, "detail": "Plugin installed to the After Effects folder, restart After Effects", "path": result.get("path")}
+
+    def check_plugin_updates(self):
+        """
+        Compares what is installed against what is published, for every
+        connection. Called once on launch so an artist never quietly
+        runs an out of date panel.
+
+        One network call for the published version, then a local file
+        read per connection, so this stays cheap even with several
+        versions of After Effects connected.
+        """
+        connections = read_connections()
+        ae_keys = [
+            k for k, r in connections.items()
+            if r.get("software_id") == "after_effects" and not r.get("demo")
+        ]
+        if not ae_keys:
+            return {"ok": True, "updates": []}
+
+        latest = _fetch_plugin_version()
+        if not latest:
+            return {"ok": True, "updates": [], "detail": "Could not reach the plugin repository"}
+
+        updates = []
+        changed = False
+        for key in ae_keys:
+            record = connections[key]
+            installed = _read_installed_plugin_version(record.get("install_dir"))
+
+            # Keep the stored value honest while we are here.
+            if installed and record.get("plugin_version") != installed:
+                record["plugin_version"] = installed
+                changed = True
+
+            outdated = _plugin_update_available(installed, latest)
+            if bool(record.get("plugin_outdated")) != outdated:
+                record["plugin_outdated"] = outdated
+                changed = True
+
+            if outdated:
+                updates.append({
+                    "key": key,
+                    "label": record.get("label", ""),
+                    "version": record.get("version", ""),
+                    "installed": installed,
+                    "latest": latest,
+                })
+
+        if changed:
+            write_connections(connections)
+
+        if updates:
+            _log(f"check_plugin_updates: {len(updates)} connection(s) need v{latest}")
+        return {"ok": True, "updates": updates, "latest": latest}
+
+    def update_plugin(self, key):
+        """
+        Installs the published version over the top. Same elevated step
+        as a fresh install, so Windows asks for permission once.
+        """
+        connections = read_connections()
+        record = connections.get(key)
+        if not record:
+            return {"ok": False, "detail": "That connection no longer exists"}
+        if record.get("demo"):
+            return {"ok": False, "detail": "This is a demo tile, there is nothing to update"}
+
+        install_dir = record.get("install_dir")
+        if not install_dir or not os.path.isdir(install_dir):
+            return {"ok": False, "detail": "Could not find the After Effects install folder"}
+
+        result = install_ae_plugin_elevated(install_dir)
+        if not result["ok"]:
+            return result
+
+        record["plugin_version"] = _read_installed_plugin_version(install_dir) or result.get("plugin_version")
+        record["plugin_path"] = result.get("path")
+        record["plugin_outdated"] = False
+        connections[key] = record
+        write_connections(connections)
+        _log(f"update_plugin: {key} now v{record['plugin_version']}")
+        return {
+            "ok": True,
+            "version": record["plugin_version"],
+            "detail": f"Plugin updated to v{record['plugin_version']}, restart After Effects",
+        }
 
     def launch_connected_software(self, key):
         connections = read_connections()
