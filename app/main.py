@@ -31,6 +31,7 @@ import zipfile
 import platform
 import subprocess
 import threading
+import tempfile
 import webbrowser
 import urllib.request
 
@@ -526,12 +527,123 @@ def install_ae_plugin(version):
     return {"ok": True, "path": target_path, "plugin_version": plugin_version}
 
 
-def install_ae_plugin_system(install_dir):
+def _run_elevated_and_wait(command, args, timeout_seconds=120):
     """
-    Fallback that writes into the install folder itself, which every
-    version of After Effects definitely reads. Needs administrator
-    rights, so it is only offered if the per-user location did not
-    work on this machine.
+    Runs one command with a UAC prompt and waits for it to finish.
+
+    This is the standard Windows consent flow: the artist sees the
+    normal system dialog and approves it themselves. Nothing is
+    bypassed, and the command is a single explicit file operation with
+    fully quoted literal paths, never a wildcard or a recursive delete.
+
+    Returns (ok, detail). Declining the prompt is reported plainly
+    rather than treated as a crash.
+    """
+    if platform.system() != "Windows":
+        return False, "Windows only"
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        SEE_MASK_NOCLOSEPROCESS = 0x00000040
+        SEE_MASK_NOASYNC = 0x00000100
+        SW_HIDE = 0
+        ERROR_CANCELLED = 1223
+
+        class SHELLEXECUTEINFOW(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("fMask", ctypes.c_ulong),
+                ("hwnd", wintypes.HWND),
+                ("lpVerb", wintypes.LPCWSTR),
+                ("lpFile", wintypes.LPCWSTR),
+                ("lpParameters", wintypes.LPCWSTR),
+                ("lpDirectory", wintypes.LPCWSTR),
+                ("nShow", ctypes.c_int),
+                ("hInstApp", wintypes.HINSTANCE),
+                ("lpIDList", ctypes.c_void_p),
+                ("lpClass", wintypes.LPCWSTR),
+                ("hkeyClass", wintypes.HKEY),
+                ("dwHotKey", wintypes.DWORD),
+                ("hIconOrMonitor", wintypes.HANDLE),
+                ("hProcess", wintypes.HANDLE),
+            ]
+
+        info = SHELLEXECUTEINFOW()
+        info.cbSize = ctypes.sizeof(info)
+        info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC
+        info.hwnd = None
+        info.lpVerb = "runas"          # this is what raises the UAC prompt
+        info.lpFile = command
+        info.lpParameters = args
+        info.lpDirectory = None
+        info.nShow = SW_HIDE
+
+        if not ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info)):
+            err = ctypes.get_last_error() or ctypes.GetLastError()
+            if err == ERROR_CANCELLED:
+                return False, "Administrator access was declined"
+            return False, f"Could not start the elevated step (error {err})"
+
+        if not info.hProcess:
+            return False, "Elevated step did not start"
+
+        ctypes.windll.kernel32.WaitForSingleObject(info.hProcess, int(timeout_seconds * 1000))
+
+        code = wintypes.DWORD()
+        ctypes.windll.kernel32.GetExitCodeProcess(info.hProcess, ctypes.byref(code))
+        ctypes.windll.kernel32.CloseHandle(info.hProcess)
+
+        if code.value != 0:
+            return False, f"Elevated step failed (exit code {code.value})"
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
+def _ps_quote(path):
+    """
+    Quotes a path for a PowerShell single-quoted string, where the
+    only escape needed is doubling an embedded single quote. Single
+    quotes also stop PowerShell interpreting anything inside, so a
+    path containing $ or backticks stays literal.
+    """
+    return "'" + str(path).replace("'", "''") + "'"
+
+
+def _run_elevated_script(body, timeout_seconds=120):
+    """
+    Writes the commands to a temporary .ps1 and runs that elevated.
+
+    Passing the script inline with -Command means nesting quotes
+    inside the already-quoted argument, which breaks the moment a path
+    contains a space, and every one of these paths does ("Program
+    Files", "Support Files", "ScriptUI Panels"). A script file has
+    only one level of quoting, so it cannot come apart that way.
+    """
+    script_path = os.path.join(tempfile.gettempdir(), "mnr_ae_plugin_step.ps1")
+    try:
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write("$ErrorActionPreference = 'Stop'\n")
+            f.write(body)
+            f.write("\nexit 0\n")
+    except Exception as e:
+        return False, f"Could not write the elevated step: {e}"
+
+    args = f'-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{script_path}"'
+    return _run_elevated_and_wait("powershell.exe", args, timeout_seconds)
+
+
+def install_ae_plugin_elevated(install_dir):
+    """
+    Installs into the After Effects folder itself, which is the only
+    location a dockable ScriptUI panel reliably loads from. That path
+    lives under Program Files, so it needs a UAC prompt.
+
+    The download happens first as the normal user, so the elevated
+    step is nothing more than copying one known file into one known
+    folder.
     """
     try:
         with urllib.request.urlopen(_AE_PLUGIN_SOURCE, timeout=20) as resp:
@@ -539,23 +651,52 @@ def install_ae_plugin_system(install_dir):
     except Exception as e:
         return {"ok": False, "detail": f"Could not download the plugin: {e}"}
 
+    if not source.strip():
+        return {"ok": False, "detail": "Downloaded plugin file was empty"}
+
+    temp_path = os.path.join(tempfile.gettempdir(), _AE_PLUGIN_FILENAME)
+    try:
+        with open(temp_path, "wb") as f:
+            f.write(source)
+    except Exception as e:
+        return {"ok": False, "detail": f"Could not stage the plugin: {e}"}
+
     target_folder = _ae_system_scriptui_folder(install_dir)
     target_path = os.path.join(target_folder, _AE_PLUGIN_FILENAME)
 
-    try:
-        os.makedirs(target_folder, exist_ok=True)
-        with open(target_path, "wb") as f:
-            f.write(source)
-    except PermissionError:
-        return {
-            "ok": False,
-            "detail": "Needs administrator rights. Close the launcher, right click it and choose Run as administrator, then repair the connection.",
-        }
-    except Exception as e:
-        return {"ok": False, "detail": f"Could not write the plugin: {e}"}
+    body = (
+        f"New-Item -ItemType Directory -Force -LiteralPath {_ps_quote(target_folder)} | Out-Null\n"
+        f"Copy-Item -LiteralPath {_ps_quote(temp_path)} -Destination {_ps_quote(target_path)} -Force\n"
+    )
 
-    _log(f"install_ae_plugin_system: {target_path}")
+    ok, detail = _run_elevated_script(body)
+    if not ok:
+        return {"ok": False, "detail": detail}
+
+    if not os.path.isfile(target_path):
+        return {"ok": False, "detail": "The elevated step finished but the plugin is not there"}
+
+    _log(f"install_ae_plugin_elevated: {target_path}")
     return {"ok": True, "path": target_path, "plugin_version": _fetch_plugin_version()}
+
+
+def uninstall_ae_plugin_elevated(install_dir):
+    """Removes the panel from the After Effects folder, with a UAC prompt."""
+    target_path = os.path.join(_ae_system_scriptui_folder(install_dir), _AE_PLUGIN_FILENAME)
+    if not os.path.isfile(target_path):
+        return {"ok": True, "detail": "Plugin was not installed there"}
+
+    body = f"Remove-Item -LiteralPath {_ps_quote(target_path)} -Force\n"
+
+    ok, detail = _run_elevated_script(body)
+    if not ok:
+        return {"ok": False, "detail": detail}
+
+    if os.path.isfile(target_path):
+        return {"ok": False, "detail": "The elevated step finished but the plugin is still there"}
+
+    _log(f"uninstall_ae_plugin_elevated: removed {target_path}")
+    return {"ok": True, "detail": "Plugin removed"}
 
 
 def _ae_plugin_locations(version, install_dir=None, year=None):
@@ -2183,7 +2324,11 @@ class MnrApi:
         # the connection is kept, so the tile shows with a red chain and
         # a Repair option rather than the whole thing silently failing.
         if software_id == "after_effects":
-            install = install_ae_plugin(version)
+            # Straight to the After Effects folder. A dockable ScriptUI
+            # panel only reliably loads from there, so asking for the
+            # UAC prompt once is better than quietly installing to a
+            # per-user folder the Window menu never reads.
+            install = install_ae_plugin_elevated(connections[key]["install_dir"])
             if install["ok"]:
                 connections[key]["plugin_version"] = install.get("plugin_version")
                 connections[key]["plugin_path"] = install.get("path")
@@ -2209,7 +2354,10 @@ class MnrApi:
         # tile would leave the panel behind in After Effects.
         detail = ""
         if removed.get("software_id") == "after_effects" and not removed.get("demo"):
-            result = uninstall_ae_plugin(removed.get("version"), removed.get("install_dir"), removed.get("year"))
+            result = uninstall_ae_plugin_elevated(removed.get("install_dir"))
+            # Also sweep the per-user and Documents spots, which earlier
+            # builds wrote to, so nothing is left behind.
+            uninstall_ae_plugin(removed.get("version"), None, removed.get("year"))
             detail = result.get("detail", "")
             if not result["ok"]:
                 return {"ok": True, "label": removed.get("label", ""), "warning": detail}
@@ -2249,7 +2397,7 @@ class MnrApi:
         # actual thing that went wrong.
         if record.get("software_id") == "after_effects":
             record["year"] = match.get("year") or match["version"]
-            install = install_ae_plugin(match["version"])
+            install = install_ae_plugin_elevated(match["install_dir"])
             if not install["ok"]:
                 return {"ok": False, "detail": install["detail"]}
             record["plugin_version"] = install.get("plugin_version")
@@ -2277,7 +2425,7 @@ class MnrApi:
         if not install_dir or not os.path.isdir(install_dir):
             return {"ok": False, "detail": "Could not find the After Effects install folder"}
 
-        result = install_ae_plugin_system(install_dir)
+        result = install_ae_plugin_elevated(install_dir)
         if not result["ok"]:
             return result
 
