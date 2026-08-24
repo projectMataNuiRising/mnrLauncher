@@ -2822,8 +2822,13 @@ function openVersionMenu(softwareId, info, available, anchorEl) {
   versionMenuItems.innerHTML = "";
 
   available.forEach(install => {
+    // Show the exact build number, with the release year underneath
+    // for context since that is how Adobe labels the install.
+    const subLabel = install.year && install.year !== install.version
+      ? `${info.label} ${install.year}`
+      : install.install_dir;
     versionMenuItems.appendChild(
-      makeMenuItem(install.version, install.install_dir, async () => {
+      makeMenuItem(install.version, subLabel, async () => {
         closeAllPopups();
         await doConnect(softwareId, install);
       })

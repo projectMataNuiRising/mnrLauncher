@@ -402,9 +402,9 @@ _DEMO_SOFTWARE = {
     "label": "Demo Software",
     "detected": True,
     "installs": [
-        {"version": "2026", "exe_path": "<demo>", "install_dir": r"C:\Demo\Demo Software 2026"},
-        {"version": "2025", "exe_path": "<demo>", "install_dir": r"C:\Demo\Demo Software 2025"},
-        {"version": "CC 2019", "exe_path": "<demo>", "install_dir": r"C:\Demo\Demo Software CC 2019"},
+        {"version": "26.3", "year": "2026", "exe_path": "<demo>", "install_dir": r"C:\Demo\Demo Software 2026"},
+        {"version": "25.1", "year": "2025", "exe_path": "<demo>", "install_dir": r"C:\Demo\Demo Software 2025"},
+        {"version": "16.0", "year": "CC 2019", "exe_path": "<demo>", "install_dir": r"C:\Demo\Demo Software CC 2019"},
     ],
 }
 
@@ -514,12 +514,74 @@ def ae_plugin_is_installed(version):
 
 def _version_from_folder_name(folder_name, prefix):
     """
-    "Adobe After Effects 2024" -> "2024", "Adobe After Effects CC 2019"
-    -> "CC 2019". Whatever trails the known prefix is the version label
-    Adobe itself uses, so it is what the artist will recognize.
+    "Adobe After Effects 2024" -> "2024". This is the release year
+    Adobe names the folder with, which is also what the per-user
+    Scripts folder is named after, so it is still needed even once the
+    exact build number is known.
     """
     trimmed = folder_name[len(prefix):].strip()
     return trimmed or "?"
+
+
+def _exe_file_version(exe_path):
+    """
+    Reads the real version out of a Windows executable's own version
+    resource, e.g. "26.3" for After Effects 2026. Uses ctypes against
+    the version API directly rather than shelling out, so it stays
+    cheap enough to run during the boot scan.
+
+    Returns None if anything at all goes wrong, the caller falls back
+    to the folder year, which is always available.
+    """
+    if platform.system() != "Windows":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        size = ctypes.windll.version.GetFileVersionInfoSizeW(exe_path, None)
+        if not size:
+            return None
+
+        buf = ctypes.create_string_buffer(size)
+        if not ctypes.windll.version.GetFileVersionInfoW(exe_path, 0, size, buf):
+            return None
+
+        block = ctypes.c_void_p()
+        length = ctypes.c_uint()
+        if not ctypes.windll.version.VerQueryValueW(
+            buf, "\\", ctypes.byref(block), ctypes.byref(length)
+        ):
+            return None
+
+        # VS_FIXEDFILEINFO: the two version dwords sit at offsets 8 and
+        # 12, each packing two 16 bit numbers.
+        class VS_FIXEDFILEINFO(ctypes.Structure):
+            _fields_ = [
+                ("dwSignature", wintypes.DWORD),
+                ("dwStrucVersion", wintypes.DWORD),
+                ("dwFileVersionMS", wintypes.DWORD),
+                ("dwFileVersionLS", wintypes.DWORD),
+                ("dwProductVersionMS", wintypes.DWORD),
+                ("dwProductVersionLS", wintypes.DWORD),
+                ("dwFileFlagsMask", wintypes.DWORD),
+                ("dwFileFlags", wintypes.DWORD),
+                ("dwFileOS", wintypes.DWORD),
+                ("dwFileType", wintypes.DWORD),
+                ("dwFileSubtype", wintypes.DWORD),
+                ("dwFileDateMS", wintypes.DWORD),
+                ("dwFileDateLS", wintypes.DWORD),
+            ]
+
+        info = ctypes.cast(block, ctypes.POINTER(VS_FIXEDFILEINFO)).contents
+        major = info.dwFileVersionMS >> 16
+        minor = info.dwFileVersionMS & 0xFFFF
+
+        if not major:
+            return None
+        return f"{major}.{minor}"
+    except Exception:
+        return None
 
 
 def _scan_one_software(software_id):
@@ -552,8 +614,15 @@ def _scan_one_software(software_id):
             if key in seen_exes:
                 continue
             seen_exes.add(key)
+            year = _version_from_folder_name(name, spec["folder_prefix"])
+            exact = _exe_file_version(exe_path)
             found.append({
-                "version": _version_from_folder_name(name, spec["folder_prefix"]),
+                # What the artist sees, the real build number when it
+                # can be read, otherwise the release year.
+                "version": exact or year,
+                # Always the folder-style year, the per-user Scripts
+                # folder is named after this so the install path needs it.
+                "year": year,
                 "exe_path": exe_path,
                 "install_dir": install_dir,
             })
@@ -574,11 +643,14 @@ def _version_sort_key(item):
     year above a CC/CS-prefixed one of the same year, since the
     modern naming is the newer product.
     """
-    version = item["version"]
-    match = _YEAR_RE.search(version)
+    # Sort on the folder year, which is consistently formatted, rather
+    # than the displayed version. Sorting "26.3" and "CC 2019" as text
+    # would put the older one first because "C" outranks "2".
+    label = item.get("year") or item["version"]
+    match = _YEAR_RE.search(label)
     year = int(match.group(1)) if match else 0
-    is_modern_naming = not re.match(r"^(CC|CS)\b", version, re.IGNORECASE)
-    return (year, is_modern_naming, version)
+    is_modern_naming = not re.match(r"^(CC|CS)\b", label, re.IGNORECASE)
+    return (year, is_modern_naming, label)
 
 
 # ------------------------------------------------------------
@@ -622,7 +694,7 @@ def _connection_health(record):
     # disk. An artist can delete it by hand, or an AE update can wipe
     # the scripts folder, and the tile should show that.
     if record.get("software_id") == "after_effects":
-        if not ae_plugin_is_installed(record.get("version")):
+        if not ae_plugin_is_installed(record.get("year") or record.get("version")):
             return {"ok": False, "reason": "The plugin is missing from After Effects, use Repair to reinstall it"}
 
     return {"ok": True, "reason": ""}
@@ -1920,14 +1992,21 @@ class MnrApi:
 
         folder_name = os.path.basename(install_dir)
         if folder_name.startswith(spec["folder_prefix"]):
-            version = _version_from_folder_name(folder_name, spec["folder_prefix"])
+            year = _version_from_folder_name(folder_name, spec["folder_prefix"])
         else:
-            version = "custom"
+            year = "custom"
+
+        exact = _exe_file_version(exe_path)
 
         return {
             "ok": True,
             "cancelled": False,
-            "install": {"version": version, "exe_path": exe_path, "install_dir": install_dir},
+            "install": {
+                "version": exact or year,
+                "year": year,
+                "exe_path": exe_path,
+                "install_dir": install_dir,
+            },
         }
 
     def get_software_connections(self):
@@ -1978,6 +2057,9 @@ class MnrApi:
             "version": version,
             "exe_path": exe_path,
             "install_dir": (install or {}).get("install_dir") or os.path.dirname(exe_path),
+            # The plugin install path is named after the release year,
+            # not the build number, so both are kept.
+            "year": (install or {}).get("year") or version,
             "connected_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "plugin_version": None,  # filled in once the plugin install is built
             "demo": is_demo,
@@ -1989,7 +2071,7 @@ class MnrApi:
         # the connection is kept, so the tile shows with a red chain and
         # a Repair option rather than the whole thing silently failing.
         if software_id == "after_effects":
-            install = install_ae_plugin(version)
+            install = install_ae_plugin(connections[key]["year"])
             if install["ok"]:
                 connections[key]["plugin_version"] = install.get("plugin_version")
                 write_connections(connections)
@@ -2010,7 +2092,7 @@ class MnrApi:
         # tile would leave the panel behind in After Effects.
         detail = ""
         if removed.get("software_id") == "after_effects" and not removed.get("demo"):
-            result = uninstall_ae_plugin(removed.get("version"))
+            result = uninstall_ae_plugin(removed.get("year") or removed.get("version"))
             detail = result.get("detail", "")
             if not result["ok"]:
                 return {"ok": True, "label": removed.get("label", ""), "warning": detail}
@@ -2049,7 +2131,8 @@ class MnrApi:
         # Repair also means putting the plugin back, that is usually the
         # actual thing that went wrong.
         if record.get("software_id") == "after_effects":
-            install = install_ae_plugin(match["version"])
+            record["year"] = match.get("year") or match["version"]
+            install = install_ae_plugin(record["year"])
             if not install["ok"]:
                 return {"ok": False, "detail": install["detail"]}
             record["plugin_version"] = install.get("plugin_version")
