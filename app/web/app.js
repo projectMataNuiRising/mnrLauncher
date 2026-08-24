@@ -2919,19 +2919,21 @@ function renderConnectedTiles() {
     badge.textContent = record.version;
     tile.appendChild(badge);
 
-    // Three states: broken (red), plugin out of date (yellow), and
-    // fine (green). Out of date is a warning rather than a fault, the
-    // connection still works.
-    const outdated = record.healthy && record.plugin_outdated;
+    // Three states, decided by the backend: problem (red), outdated
+    // (yellow), ok (green). Read the state directly rather than
+    // inferring from a healthy flag, an outdated connection is not
+    // healthy but is also not broken.
+    const state = record.state || (record.healthy ? "ok" : "problem");
+    const outdated = state === "outdated";
     const chain = document.createElement("span");
-    if (!record.healthy) {
+    if (state === "problem") {
       chain.className = "tile-chain tile-chain-problem";
       chain.innerHTML = CHAIN_BROKEN_SVG;
       chain.title = record.problem;
     } else if (outdated) {
       chain.className = "tile-chain tile-chain-outdated";
       chain.innerHTML = CHAIN_OK_SVG;
-      chain.title = `Plugin update available (installed v${record.plugin_version || "?"})`;
+      chain.title = record.problem || `Plugin update available (installed v${record.plugin_version || "?"})`;
     } else {
       chain.className = "tile-chain tile-chain-ok";
       chain.innerHTML = CHAIN_OK_SVG;
@@ -2963,16 +2965,18 @@ function openConnectionMenu(key, record, anchorEl) {
   connectionMenuTitle.textContent = `${record.label} ${record.version}`;
   connectionMenuItems.innerHTML = "";
 
-  if (record.healthy) {
+  const state = record.state || (record.healthy ? "ok" : "problem");
+
+  if (state === "ok") {
     connectionMenuProblem.classList.add("hidden");
   } else {
     connectionMenuProblem.textContent = record.problem;
     connectionMenuProblem.classList.remove("hidden");
   }
 
-  // Repair is offered first when something is actually wrong, since
-  // that is what the artist opened this menu to deal with.
-  if (!record.healthy) {
+  // Repair is only for a genuinely broken connection. An out of date
+  // plugin is not broken, it has Update plugin below instead.
+  if (state === "problem") {
     connectionMenuItems.appendChild(
       makeMenuItem("Repair connection", "Look for this software again", async () => {
         closeAllPopups();

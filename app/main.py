@@ -984,36 +984,46 @@ def write_connections(connections):
 
 def _connection_health(record):
     """
-    Cheap health check for an existing connection, used to decide
-    whether the tile's chain icon shows green or red. Only checks
-    things that are instant, no heavy work during a render of the
-    home screen.
+    Cheap health check for an existing connection. Three states rather
+    than a yes/no, because an out of date plugin is not the same kind
+    of thing as a broken connection:
+
+        ok        green,  nothing to do
+        outdated  yellow, still works, an update is waiting
+        problem   red,    genuinely broken, needs repair
+
+    Only checks things that are instant, this runs on every render of
+    the home screen.
     """
     if record.get("demo"):
-        # One demo version reports a problem on purpose, so the red
-        # chain state and its menu can be seen without having to break
-        # a real install to get there.
+        # The demo entries deliberately show the non-green states so
+        # all three can be seen without breaking a real install.
         if record.get("version") == "CC 2019":
-            return {"ok": False, "reason": "Demo: this is what a broken connection looks like"}
-        return {"ok": True, "reason": ""}
+            return {"state": "problem", "reason": "Demo: this is what a broken connection looks like"}
+        if record.get("version") == "25.1":
+            return {"state": "outdated", "reason": "Demo: this is what an out of date plugin looks like"}
+        return {"state": "ok", "reason": ""}
 
     exe_path = record.get("exe_path") or ""
     if not exe_path or not os.path.isfile(exe_path):
-        return {"ok": False, "reason": "The software is no longer at the path it was connected from"}
+        return {"state": "problem", "reason": "The software is no longer at the path it was connected from"}
 
-    # A connection is only healthy if the plugin is actually still on
-    # disk. An artist can delete it by hand, or an AE update can wipe
-    # the scripts folder, and the tile should show that.
     if record.get("software_id") == "after_effects":
         if not ae_plugin_is_installed(record.get("version"), record.get("install_dir")):
-            return {"ok": False, "reason": "The plugin is missing from After Effects, use Repair to reinstall it"}
+            return {"state": "problem", "reason": "The plugin is missing from After Effects, use Repair to reinstall it"}
 
         # An out of date plugin is deliberately NOT treated as broken.
-        # The connection still works, so it shows as a softer warning
-        # on the tile and is raised when the artist actually launches
-        # After Effects, rather than nagging on every screen.
+        # The connection still works, so it is a softer warning and is
+        # raised when the artist actually launches After Effects.
+        # No network call here, this runs on every render of the home
+        # screen. The launch-time check records the comparison.
+        if record.get("plugin_outdated"):
+            return {
+                "state": "outdated",
+                "reason": f"Plugin v{record.get('plugin_version') or '?'} is installed, a newer one is available",
+            }
 
-    return {"ok": True, "reason": ""}
+    return {"state": "ok", "reason": ""}
 
 
 # ------------------------------------------------------------
