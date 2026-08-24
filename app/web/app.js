@@ -3046,17 +3046,44 @@ let jobDrawerOpen = false;
 let jobPollInterval = null;
 let lastActiveJobCount = 0;
 
-const JOB_DRAWER_HEIGHT = 260;
+// How much the window was grown when the drawer opened, so closing
+// gives back exactly that and no more.
+let jobDrawerGrewBy = 0;
+
+// Keeps the window in step when the drawer's content changes while it
+// is open, e.g. a second job arriving. Ignores small differences so a
+// polling tick cannot cause constant nudging.
+function resizeWindowToDrawer() {
+  if (!jobDrawerOpen) return;
+  const needed = Math.ceil(jobDrawerBody.getBoundingClientRect().height);
+  const delta = needed - jobDrawerGrewBy;
+  if (Math.abs(delta) < 24) return;
+  jobDrawerGrewBy = needed;
+  window.pywebview.api.grow_window_for_drawer(delta);
+}
 
 function setJobDrawerOpen(open) {
   if (open === jobDrawerOpen) return;
   jobDrawerOpen = open;
   jobDrawer.classList.toggle("open", open);
   jobDrawerBody.classList.toggle("hidden", !open);
-  // Grow the window by the drawer's height so it adds space instead
-  // of squeezing the page. Falls back to sharing the space if the
-  // window is already near the bottom of the screen.
-  window.pywebview.api.grow_window_for_drawer(open ? JOB_DRAWER_HEIGHT : -JOB_DRAWER_HEIGHT);
+
+  if (open) {
+    // Measure what the drawer actually needs rather than assuming its
+    // maximum. With only one or two jobs it is far shorter than the
+    // cap, and growing by the cap would leave a band of empty window
+    // below the content.
+    const needed = Math.ceil(jobDrawerBody.getBoundingClientRect().height);
+    jobDrawerGrewBy = needed;
+    if (needed > 0) {
+      window.pywebview.api.grow_window_for_drawer(needed);
+    }
+  } else {
+    if (jobDrawerGrewBy > 0) {
+      window.pywebview.api.grow_window_for_drawer(-jobDrawerGrewBy);
+    }
+    jobDrawerGrewBy = 0;
+  }
 }
 
 jobDrawerBar.addEventListener("click", () => setJobDrawerOpen(!jobDrawerOpen));
@@ -3175,6 +3202,7 @@ async function refreshJobs() {
     if (!result.ok) return;
 
     renderJobs(result.jobs);
+    resizeWindowToDrawer();
 
     const active = result.active_count;
     const running = result.jobs.find(j => j.status === "running");
@@ -3210,7 +3238,9 @@ async function submitJobAndShow(submitPromise) {
     showToast(result.detail, 5000);
     return false;
   }
-  setJobDrawerOpen(true);
+  // Render the job list first, otherwise opening the drawer measures
+  // the empty state and the window ends up the wrong size.
   await refreshJobs();
+  setJobDrawerOpen(true);
   return true;
 }
