@@ -2919,10 +2919,24 @@ function renderConnectedTiles() {
     badge.textContent = record.version;
     tile.appendChild(badge);
 
+    // Three states: broken (red), plugin out of date (yellow), and
+    // fine (green). Out of date is a warning rather than a fault, the
+    // connection still works.
+    const outdated = record.healthy && record.plugin_outdated;
     const chain = document.createElement("span");
-    chain.className = "tile-chain " + (record.healthy ? "tile-chain-ok" : "tile-chain-problem");
-    chain.innerHTML = record.healthy ? CHAIN_OK_SVG : CHAIN_BROKEN_SVG;
-    chain.title = record.healthy ? "Connection healthy" : record.problem;
+    if (!record.healthy) {
+      chain.className = "tile-chain tile-chain-problem";
+      chain.innerHTML = CHAIN_BROKEN_SVG;
+      chain.title = record.problem;
+    } else if (outdated) {
+      chain.className = "tile-chain tile-chain-outdated";
+      chain.innerHTML = CHAIN_OK_SVG;
+      chain.title = `Plugin update available (installed v${record.plugin_version || "?"})`;
+    } else {
+      chain.className = "tile-chain tile-chain-ok";
+      chain.innerHTML = CHAIN_OK_SVG;
+      chain.title = "Connection healthy";
+    }
     chain.addEventListener("click", (e) => {
       e.stopPropagation(); // do not also launch the software
       openConnectionMenu(key, record, chain);
@@ -2930,6 +2944,12 @@ function renderConnectedTiles() {
     tile.appendChild(chain);
 
     tile.addEventListener("click", async () => {
+      // Raise an out of date plugin here, at the moment it actually
+      // matters, rather than interrupting on launch.
+      if (record.healthy && record.plugin_outdated) {
+        const proceed = await askAboutPluginUpdate(key, record);
+        if (!proceed) return;
+      }
       const result = await window.pywebview.api.launch_connected_software(key);
       if (!result.ok) {
         showToast(result.detail, 5000);
@@ -3268,67 +3288,70 @@ async function submitJobAndShow(submitPromise) {
 // unexplained UAC dialog is alarming.
 // ---------------------------------------------------------------
 
-const pluginUpdateNotice = document.getElementById("plugin-update-notice");
+const pluginUpdateBackdrop = document.getElementById("plugin-update-backdrop");
+const pluginUpdateDialog = document.getElementById("plugin-update-dialog");
 const pluginUpdateTitle = document.getElementById("plugin-update-title");
 const pluginUpdateSub = document.getElementById("plugin-update-sub");
 const pluginUpdateButton = document.getElementById("plugin-update-button");
-const pluginUpdateLater = document.getElementById("plugin-update-later");
+const pluginUpdateSkip = document.getElementById("plugin-update-skip");
+const pluginUpdateCancel = document.getElementById("plugin-update-cancel");
 
-let pendingPluginUpdates = [];
+function closePluginUpdateDialog() {
+  pluginUpdateDialog.classList.add("hidden");
+  pluginUpdateBackdrop.classList.add("hidden");
+}
 
-pluginUpdateLater.addEventListener("click", () => {
-  pluginUpdateNotice.classList.add("hidden");
-});
+// Resolves true if the launch should go ahead, false to stop.
+function askAboutPluginUpdate(key, record) {
+  return new Promise(resolve => {
+    pluginUpdateTitle.textContent = "Plugin update available";
+    pluginUpdateSub.textContent =
+      `${record.label} ${record.version} is running plugin v${record.plugin_version || "?"}, ` +
+      `and a newer version has been published. Updating asks Windows for permission, ` +
+      `and takes effect the next time After Effects starts.`;
 
-pluginUpdateButton.addEventListener("click", async () => {
-  pluginUpdateButton.disabled = true;
-  pluginUpdateButton.textContent = "Updating...";
+    pluginUpdateBackdrop.classList.remove("hidden");
+    pluginUpdateDialog.classList.remove("hidden");
+    pluginUpdateButton.disabled = false;
+    pluginUpdateButton.textContent = "Update and launch";
 
-  const failures = [];
-  for (const update of pendingPluginUpdates) {
-    const result = await window.pywebview.api.update_plugin(update.key);
-    if (!result.ok) failures.push(`${update.label} ${update.version}: ${result.detail}`);
-  }
+    // Replaced each time so an old handler cannot fire for a later
+    // dialog opened against a different connection.
+    pluginUpdateButton.onclick = async () => {
+      pluginUpdateButton.disabled = true;
+      pluginUpdateButton.textContent = "Updating...";
+      const result = await window.pywebview.api.update_plugin(key);
+      closePluginUpdateDialog();
+      showToast(result.detail, result.ok ? 6000 : 9000);
+      await refreshSoftwareSection();
+      resolve(true);   // launch either way, the artist asked to open it
+    };
 
-  pluginUpdateButton.disabled = false;
-  pluginUpdateButton.textContent = "Update now";
+    pluginUpdateSkip.onclick = () => {
+      closePluginUpdateDialog();
+      resolve(true);
+    };
 
-  if (failures.length) {
-    showToast(failures.join(" | "), 9000);
-    // Leave the notice up, the update genuinely did not happen.
-    return;
-  }
+    pluginUpdateCancel.onclick = () => {
+      closePluginUpdateDialog();
+      resolve(false);
+    };
 
-  pluginUpdateNotice.classList.add("hidden");
-  pendingPluginUpdates = [];
-  showToast("Plugin updated, restart After Effects to pick it up", 6000);
-  await refreshSoftwareSection();
-});
+    pluginUpdateBackdrop.onclick = () => {
+      closePluginUpdateDialog();
+      resolve(false);
+    };
+  });
+}
 
+// Runs on launch purely to record which connections are behind, so the
+// chain icons can show it. Nothing is shown to the artist here, the
+// prompt comes when they actually go to open the software.
 async function checkPluginUpdates() {
   try {
-    const result = await window.pywebview.api.check_plugin_updates();
-    if (!result.ok || !result.updates || result.updates.length === 0) {
-      pluginUpdateNotice.classList.add("hidden");
-      pendingPluginUpdates = [];
-      return;
-    }
-
-    pendingPluginUpdates = result.updates;
-
-    const first = result.updates[0];
-    if (result.updates.length === 1) {
-      pluginUpdateTitle.textContent = `Plugin update available (v${first.latest})`;
-      pluginUpdateSub.textContent =
-        `${first.label} ${first.version} has v${first.installed}. Windows will ask for permission to update it.`;
-    } else {
-      pluginUpdateTitle.textContent = `Plugin updates available (v${first.latest})`;
-      pluginUpdateSub.textContent =
-        `${result.updates.length} connections are out of date. Windows will ask for permission to update them.`;
-    }
-
-    pluginUpdateNotice.classList.remove("hidden");
+    await window.pywebview.api.check_plugin_updates();
+    await refreshSoftwareSection();
   } catch (e) {
-    // Offline or the repo is unreachable, nothing worth interrupting for.
+    // Offline or the repo is unreachable, not worth interrupting for.
   }
 }

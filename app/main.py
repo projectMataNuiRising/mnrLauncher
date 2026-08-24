@@ -1008,14 +1008,10 @@ def _connection_health(record):
         if not ae_plugin_is_installed(record.get("version"), record.get("install_dir")):
             return {"ok": False, "reason": "The plugin is missing from After Effects, use Repair to reinstall it"}
 
-        # Deliberately no network call here, this runs on every render
-        # of the home screen. The launch-time update check does the
-        # comparison and records the result.
-        if record.get("plugin_outdated"):
-            return {
-                "ok": False,
-                "reason": f"The plugin is out of date (v{record.get('plugin_version')}), use Update plugin",
-            }
+        # An out of date plugin is deliberately NOT treated as broken.
+        # The connection still works, so it shows as a softer warning
+        # on the tile and is raised when the artist actually launches
+        # After Effects, rather than nagging on every screen.
 
     return {"ok": True, "reason": ""}
 

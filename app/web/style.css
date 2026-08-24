@@ -1584,29 +1584,31 @@ body {
 
 /* ---------------- Plugin update notice ---------------- */
 
-.plugin-update-notice {
+.plugin-update-dialog {
   position: fixed;
-  top: 68px;
+  top: 50%;
   left: 50%;
-  transform: translateX(-50%);
-  z-index: 320;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  max-width: 560px;
-  padding: 12px 14px;
+  transform: translate(-50%, -50%);
+  z-index: 420;
+  width: 400px;
+  padding: 22px;
   border-radius: var(--radius);
   background: var(--panel);
-  border: 1px solid var(--accent);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--yellow);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
 }
 
-.plugin-update-notice.hidden { display: none; }
+.plugin-update-dialog.hidden { display: none; }
 
-.plugin-update-text { flex: 1; }
+.plugin-update-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 18px;
+}
 
 .plugin-update-title {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
   margin-bottom: 3px;
 }
@@ -1617,13 +1619,4 @@ body {
   line-height: 1.4;
 }
 
-.plugin-update-button {
-  flex-shrink: 0;
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.plugin-update-button:hover {
-  background: var(--accent);
-  color: var(--panel);
-}
+.tile-chain-outdated { color: var(--yellow); }

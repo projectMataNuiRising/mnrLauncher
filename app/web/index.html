@@ -65,15 +65,17 @@
     <div id="debug-log" class="debug-log"></div>
   </div>
 
-  <!-- Plugin update notice. Appears on launch when an installed panel
-       is behind what is published, so nobody quietly runs an old one. -->
-  <div id="plugin-update-notice" class="plugin-update-notice hidden">
-    <div class="plugin-update-text">
-      <div class="plugin-update-title" id="plugin-update-title">Plugin update available</div>
-      <div class="plugin-update-sub" id="plugin-update-sub"></div>
+  <!-- Plugin update dialog. Shown only when the artist actually goes
+       to launch the software, not on every start of the launcher. -->
+  <div id="plugin-update-backdrop" class="popup-backdrop hidden"></div>
+  <div id="plugin-update-dialog" class="plugin-update-dialog hidden">
+    <div class="plugin-update-title" id="plugin-update-title">Plugin update available</div>
+    <div class="plugin-update-sub" id="plugin-update-sub"></div>
+    <div class="plugin-update-actions">
+      <button type="button" id="plugin-update-button" class="upload-button ready">Update and launch</button>
+      <button type="button" id="plugin-update-skip" class="small-button">Launch without updating</button>
+      <button type="button" id="plugin-update-cancel" class="small-button">Cancel</button>
     </div>
-    <button type="button" id="plugin-update-button" class="small-button plugin-update-button">Update now</button>
-    <button type="button" id="plugin-update-later" class="icon-only-button" title="Later">&times;</button>
   </div>
 
   <!-- Brief in-app notice, e.g. "Launching Blender..." -->
