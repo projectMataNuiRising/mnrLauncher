@@ -2351,7 +2351,8 @@ class MnrApi:
 
             health = _connection_health(record)
             out[key] = dict(record)
-            out[key]["healthy"] = health["ok"]
+            out[key]["state"] = health["state"]
+            out[key]["healthy"] = health["state"] == "ok"
             out[key]["problem"] = health["reason"]
 
         if changed:

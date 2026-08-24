@@ -601,6 +601,7 @@ body {
 .tile-chain svg { width: 15px; height: 15px; }
 
 .tile-chain-ok { color: var(--green); }
+.tile-chain-outdated { color: var(--yellow); }
 .tile-chain-problem { color: var(--red); }
 
 .tile-chain:hover {
@@ -1582,7 +1583,9 @@ body {
   padding: 10px 0;
 }
 
-/* ---------------- Plugin update notice ---------------- */
+/* ---------------- Plugin update dialog ----------------
+   Shown only when launching software whose plugin is behind, so
+   startup is never interrupted for something that still works. */
 
 .plugin-update-dialog {
   position: fixed;
@@ -1590,33 +1593,34 @@ body {
   left: 50%;
   transform: translate(-50%, -50%);
   z-index: 420;
-  width: 400px;
+  width: 440px;
+  max-width: calc(100vw - 48px);
   padding: 22px;
   border-radius: var(--radius);
   background: var(--panel);
-  border: 1px solid var(--yellow);
+  border: 1px solid var(--border);
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
 }
 
 .plugin-update-dialog.hidden { display: none; }
 
+.plugin-update-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.plugin-update-sub {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 18px;
+}
+
 .plugin-update-actions {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-top: 18px;
 }
 
-.plugin-update-title {
-  font-size: 15px;
-  font-weight: 600;
-  margin-bottom: 3px;
-}
-
-.plugin-update-sub {
-  font-size: 11px;
-  color: var(--muted);
-  line-height: 1.4;
-}
-
-.tile-chain-outdated { color: var(--yellow); }
+.plugin-update-actions .upload-button { margin-top: 0; }

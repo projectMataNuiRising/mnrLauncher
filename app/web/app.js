@@ -2945,16 +2945,13 @@ function renderConnectedTiles() {
 
     tile.addEventListener("click", async () => {
       // Raise an out of date plugin here, at the moment it actually
-      // matters, rather than interrupting on launch.
-      if (record.healthy && record.plugin_outdated) {
-        const proceed = await askAboutPluginUpdate(key, record);
-        if (!proceed) return;
+      // matters, rather than interrupting on launch. The dialog itself
+      // launches, whichever button is used.
+      if (outdated) {
+        promptPluginUpdate(key, record);
+        return;
       }
-      const result = await window.pywebview.api.launch_connected_software(key);
-      if (!result.ok) {
-        showToast(result.detail, 5000);
-        await refreshSoftwareSection(); // reflect the now-known problem
-      }
+      await doLaunchConnected(key);
     });
 
     launchGrid.appendChild(tile);
@@ -3279,13 +3276,14 @@ async function submitJobAndShow(submitPromise) {
 // ---------------------------------------------------------------
 // Plugin updates.
 //
-// Checked once on launch. The installed version is read out of the
-// panel file itself rather than from anything we recorded, so a panel
-// replaced by hand or left over from an older build is still spotted.
+// The version check runs on launch and only sets state, it never
+// interrupts. An out of date plugin still works, so the tile's chain
+// simply turns yellow. The prompt appears at the moment it actually
+// matters: when the artist goes to launch that software.
 //
-// Updating writes into the After Effects folder, so Windows asks for
-// permission. The notice says so before the prompt appears, since an
-// unexplained UAC dialog is alarming.
+// The installed version is read out of the panel file itself rather
+// than from anything we recorded, so a panel replaced by hand or left
+// over from an older build is still spotted.
 // ---------------------------------------------------------------
 
 const pluginUpdateBackdrop = document.getElementById("plugin-update-backdrop");
@@ -3296,62 +3294,69 @@ const pluginUpdateButton = document.getElementById("plugin-update-button");
 const pluginUpdateSkip = document.getElementById("plugin-update-skip");
 const pluginUpdateCancel = document.getElementById("plugin-update-cancel");
 
-function closePluginUpdateDialog() {
+function hidePluginUpdateDialog() {
   pluginUpdateDialog.classList.add("hidden");
   pluginUpdateBackdrop.classList.add("hidden");
 }
 
-// Resolves true if the launch should go ahead, false to stop.
-function askAboutPluginUpdate(key, record) {
-  return new Promise(resolve => {
-    pluginUpdateTitle.textContent = "Plugin update available";
-    pluginUpdateSub.textContent =
-      `${record.label} ${record.version} is running plugin v${record.plugin_version || "?"}, ` +
-      `and a newer version has been published. Updating asks Windows for permission, ` +
-      `and takes effect the next time After Effects starts.`;
+pluginUpdateCancel.addEventListener("click", hidePluginUpdateDialog);
+pluginUpdateBackdrop.addEventListener("click", hidePluginUpdateDialog);
 
-    pluginUpdateBackdrop.classList.remove("hidden");
-    pluginUpdateDialog.classList.remove("hidden");
-    pluginUpdateButton.disabled = false;
-    pluginUpdateButton.textContent = "Update and launch";
-
-    // Replaced each time so an old handler cannot fire for a later
-    // dialog opened against a different connection.
-    pluginUpdateButton.onclick = async () => {
-      pluginUpdateButton.disabled = true;
-      pluginUpdateButton.textContent = "Updating...";
-      const result = await window.pywebview.api.update_plugin(key);
-      closePluginUpdateDialog();
-      showToast(result.detail, result.ok ? 6000 : 9000);
-      await refreshSoftwareSection();
-      resolve(true);   // launch either way, the artist asked to open it
-    };
-
-    pluginUpdateSkip.onclick = () => {
-      closePluginUpdateDialog();
-      resolve(true);
-    };
-
-    pluginUpdateCancel.onclick = () => {
-      closePluginUpdateDialog();
-      resolve(false);
-    };
-
-    pluginUpdateBackdrop.onclick = () => {
-      closePluginUpdateDialog();
-      resolve(false);
-    };
-  });
-}
-
-// Runs on launch purely to record which connections are behind, so the
-// chain icons can show it. Nothing is shown to the artist here, the
-// prompt comes when they actually go to open the software.
+// Sets state only. Nothing is shown to the artist here, the chain
+// colour is the whole visible result.
 async function checkPluginUpdates() {
   try {
     await window.pywebview.api.check_plugin_updates();
     await refreshSoftwareSection();
   } catch (e) {
-    // Offline or the repo is unreachable, not worth interrupting for.
+    // Offline, or the plugin repository is unreachable. Not worth
+    // interrupting a launch over.
+  }
+}
+
+// Asks about the update, then launches either way. Returns nothing,
+// the buttons drive what happens next.
+function promptPluginUpdate(key, record) {
+  pluginUpdateTitle.textContent = "Plugin update available";
+  pluginUpdateSub.textContent =
+    `${record.label} ${record.version} has plugin v${record.plugin_version} installed, ` +
+    `and a newer one is available. Updating writes into the After Effects folder, ` +
+    `so Windows will ask for permission. After Effects needs a restart to pick it up.`;
+
+  pluginUpdateButton.disabled = false;
+  pluginUpdateButton.textContent = "Update and launch";
+
+  pluginUpdateButton.onclick = async () => {
+    pluginUpdateButton.disabled = true;
+    pluginUpdateButton.textContent = "Updating...";
+
+    const result = await window.pywebview.api.update_plugin(key);
+    if (!result.ok) {
+      pluginUpdateButton.disabled = false;
+      pluginUpdateButton.textContent = "Update and launch";
+      showToast(result.detail, 9000);
+      return;
+    }
+
+    hidePluginUpdateDialog();
+    showToast(result.detail, 6000);
+    await refreshSoftwareSection();
+    await doLaunchConnected(key);
+  };
+
+  pluginUpdateSkip.onclick = async () => {
+    hidePluginUpdateDialog();
+    await doLaunchConnected(key);
+  };
+
+  pluginUpdateBackdrop.classList.remove("hidden");
+  pluginUpdateDialog.classList.remove("hidden");
+}
+
+async function doLaunchConnected(key) {
+  const result = await window.pywebview.api.launch_connected_software(key);
+  if (!result.ok) {
+    showToast(result.detail, 5000);
+    await refreshSoftwareSection();
   }
 }
