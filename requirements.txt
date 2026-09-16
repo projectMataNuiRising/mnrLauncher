@@ -4,3 +4,4 @@ psutil
 requests
 Pillow
 send2trash
+certifi

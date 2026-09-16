@@ -432,6 +432,48 @@ _DEMO_UNDETECTED = {
 # more moving parts than this needs.
 # ------------------------------------------------------------
 
+def _ssl_context():
+    """
+    A certificate store that trusts BOTH the machine's own CAs and a CA
+    bundle this app carries itself.
+
+    Both halves are needed:
+
+      - PyInstaller bundles no CA bundle, so on a freshly imaged machine
+        the system store has not yet cached the intermediate certs and
+        HTTPS fails with "unable to get local issuer certificate".
+        certifi fixes that case.
+
+      - A machine behind a TLS-inspecting proxy has the proxy's CA in
+        its system store and nowhere else. Using certifi ALONE there
+        would break a machine that previously worked, because certifi
+        does not contain that private CA.
+
+    So start from the system defaults and add certifi to them, rather
+    than replacing one with the other.
+    """
+    try:
+        import ssl
+        ctx = ssl.create_default_context()   # system CAs
+    except Exception:
+        return None
+
+    try:
+        import certifi
+        ctx.load_verify_locations(cafile=certifi.where())   # plus our own
+    except Exception:
+        # No certifi available, the system store alone is still valid.
+        pass
+
+    return ctx
+
+def _url_open(url_or_request, timeout=20):
+    ctx = _ssl_context()
+    if ctx is not None:
+        return urllib.request.urlopen(url_or_request, timeout=timeout, context=ctx)
+    return urllib.request.urlopen(url_or_request, timeout=timeout)
+
+
 _AE_PLUGIN_RAW_BASE = "https://raw.githubusercontent.com/projectMataNuiRising/mnrLauncher-afterEffects/main"
 _AE_PLUGIN_FILENAME = "MNR_Launcher_Panel.jsx"
 _AE_PLUGIN_SOURCE = f"{_AE_PLUGIN_RAW_BASE}/src/{_AE_PLUGIN_FILENAME}"
@@ -531,7 +573,7 @@ def _plugin_update_available(installed, latest):
 def _fetch_plugin_version():
     """Reads the version out of the plugin's own manifest, best effort."""
     try:
-        with urllib.request.urlopen(_AE_PLUGIN_MANIFEST, timeout=10) as resp:
+        with _url_open(_AE_PLUGIN_MANIFEST, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return data.get("version")
     except Exception:
@@ -545,7 +587,7 @@ def install_ae_plugin(version):
     if the artist has never installed a script before.
     """
     try:
-        with urllib.request.urlopen(_AE_PLUGIN_SOURCE, timeout=20) as resp:
+        with _url_open(_AE_PLUGIN_SOURCE, timeout=20) as resp:
             source = resp.read()
     except Exception as e:
         return {"ok": False, "detail": f"Could not download the plugin: {e}"}
@@ -719,7 +761,7 @@ def install_ae_plugin_elevated(install_dir):
     folder.
     """
     try:
-        with urllib.request.urlopen(_AE_PLUGIN_SOURCE, timeout=20) as resp:
+        with _url_open(_AE_PLUGIN_SOURCE, timeout=20) as resp:
             source = resp.read()
     except Exception as e:
         return {"ok": False, "detail": f"Could not download the plugin: {e}"}

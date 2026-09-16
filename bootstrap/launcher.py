@@ -134,6 +134,77 @@ REFRESH_EXIT_CODE = 42
 SHELL_UPDATE_EXIT_CODE = 44
 
 
+def _show_message(message, title="MNR Launcher"):
+    """
+    A visible message for a windowed build. print() goes nowhere and
+    input() raises "lost sys.stdin", because PyInstaller's --windowed
+    mode gives the process no console at all.
+    """
+    try:
+        if platform.system() == "Windows":
+            import ctypes
+            MB_ICONERROR = 0x10
+            ctypes.windll.user32.MessageBoxW(0, message, title, MB_ICONERROR)
+            return
+    except Exception:
+        pass
+    # Console builds and other platforms can still print.
+    print(f"[MNR] {message}")
+
+
+def _ssl_context():
+    """
+    A certificate store that trusts BOTH the machine's own CAs and a CA
+    bundle this app carries itself.
+
+    Both halves are needed:
+
+      - PyInstaller bundles no CA bundle, so on a freshly imaged machine
+        the system store has not yet cached the intermediate certs and
+        HTTPS fails with "unable to get local issuer certificate".
+        certifi fixes that case.
+
+      - A machine behind a TLS-inspecting proxy has the proxy's CA in
+        its system store and nowhere else. Using certifi ALONE there
+        would break a machine that previously worked, because certifi
+        does not contain that private CA.
+
+    So start from the system defaults and add certifi to them, rather
+    than replacing one with the other.
+    """
+    try:
+        import ssl
+        ctx = ssl.create_default_context()   # system CAs
+    except Exception:
+        return None
+
+    try:
+        import certifi
+        ctx.load_verify_locations(cafile=certifi.where())   # plus our own
+    except Exception:
+        # No certifi available, the system store alone is still valid.
+        pass
+
+    return ctx
+
+def _url_open(url_or_request, timeout=20):
+    """urlopen with our own certificate store."""
+    ctx = _ssl_context()
+    if ctx is not None:
+        return urllib.request.urlopen(url_or_request, timeout=timeout, context=ctx)
+    return urllib.request.urlopen(url_or_request, timeout=timeout)
+
+
+def _url_download(url, dest_path, timeout=60):
+    """
+    Replacement for urlretrieve that uses our certificate store and
+    actually honours a timeout, so a stalled connection fails instead
+    of hanging the launcher forever.
+    """
+    with _url_open(url, timeout=timeout) as resp, open(dest_path, "wb") as f:
+        shutil.copyfileobj(resp, f)
+
+
 def get_dev_settings_path(cache_dir):
     return os.path.join(cache_dir, "dev_settings.json")
 
@@ -196,10 +267,23 @@ def fetch_latest_app(cache_dir, branch="main", status_callback=None):
     tmp_zip = os.path.join(tempfile.gettempdir(), "mnr_launcher_latest.zip")
     tmp_extract = os.path.join(tempfile.gettempdir(), "mnr_launcher_extract")
 
-    try:
-        urllib.request.urlretrieve(zip_url, tmp_zip)
-    except (urllib.error.URLError, OSError) as e:
-        report(f"Could not reach GitHub ({e}), using the last downloaded copy.")
+    # Retry a couple of times before giving up. A single flaky moment
+    # should not leave a first-run machine with no app code at all,
+    # since there is no cached copy to fall back on.
+    last_error = None
+    for attempt in range(1, 4):
+        try:
+            _url_download(zip_url, tmp_zip)
+            last_error = None
+            break
+        except Exception as e:
+            last_error = e
+            if attempt < 3:
+                report(f"Download attempt {attempt} failed ({e}), retrying...")
+                time.sleep(2)
+
+    if last_error is not None:
+        report(f"Could not reach GitHub ({last_error}), using the last downloaded copy.")
         return False
 
     try:
@@ -256,9 +340,13 @@ def run_cached_app(cache_dir, update_info=None):
     """
     main_py = os.path.join(cache_dir, "app", "main.py")
     if not os.path.isfile(main_py):
-        print("[MNR] No app code available, and nothing cached from a previous run.")
-        print("[MNR] Check your internet connection and try again.")
-        input("Press Enter to close...")
+        _show_message(
+            "MNR Launcher could not download its app code, and there is no "
+            "copy saved from a previous run.\n\n"
+            "This is usually a connection problem. Check that this machine "
+            "can reach github.com, then try again.\n\n"
+            f"Details are in:\n{get_boot_log_path(cache_dir)}"
+        )
         sys.exit(1)
 
     def apply_update_callback():
@@ -312,7 +400,7 @@ def check_for_shell_update(dev_mode=False, status_callback=None):
                 ALL_RELEASES_API_URL,
                 headers={"Accept": "application/vnd.github+json"},
             )
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with _url_open(req, timeout=10) as resp:
                 releases = json.loads(resp.read().decode("utf-8"))
             release = next((r for r in releases if r.get("prerelease")), None)
             if not release:
@@ -323,7 +411,7 @@ def check_for_shell_update(dev_mode=False, status_callback=None):
                 LATEST_RELEASE_API_URL,
                 headers={"Accept": "application/vnd.github+json"},
             )
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with _url_open(req, timeout=10) as resp:
                 release = json.loads(resp.read().decode("utf-8"))
     except Exception as e:
         report(f"Could not check for a shell update ({e}), skipping.")
@@ -370,7 +458,7 @@ def _do_apply_shell_update(update_info, status_callback=None):
     new_exe_path = current_exe + ".new"
 
     try:
-        urllib.request.urlretrieve(update_info["asset_url"], new_exe_path)
+        _url_download(update_info["asset_url"], new_exe_path)
     except Exception as e:
         report(f"Shell update download failed ({e}).")
         return False

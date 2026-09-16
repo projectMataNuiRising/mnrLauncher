@@ -46,7 +46,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pywebview pythonnet psutil requests Pillow send2trash pyinstaller
+          pip install pywebview pythonnet psutil requests Pillow send2trash certifi pyinstaller
 
       # Bakes the build number into launcher.py's SHELL_VERSION placeholder
       # before compiling, so the running exe always knows its own version,
@@ -103,7 +103,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pywebview psutil requests Pillow send2trash pyinstaller
+          pip install pywebview psutil requests Pillow send2trash certifi pyinstaller
 
       - name: Stamp the build version
         run: |
