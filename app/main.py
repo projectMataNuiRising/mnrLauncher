@@ -1498,7 +1498,7 @@ def _run_archive_queue_worker(archive_items, restore_items, delete_source, delet
 
             ok, detail = True, os.path.basename(dest_folder)
             try:
-                os.makedirs(dest_folder, exist_ok=True)
+                _makedirs_retry(dest_folder)
                 with zipfile.ZipFile(zip_path, "r") as zf:
                     for zi in zf.infolist():
                         _check_cancel()
@@ -1555,10 +1555,51 @@ def _upload_total_bytes(payload):
     return total
 
 
+def _retry_on_transient(action, attempts=5, first_delay=0.4, what="operation"):
+    """
+    Retries a filesystem action that hit a transient Windows error.
+
+    pCloud's virtual drive locks folders while it indexes and syncs
+    what was just written, so an operation immediately after a large
+    copy can come back as "[WinError 5] Access is denied" even though
+    nothing is wrong with permissions. The give-away is that the same
+    operation succeeds moments later.
+
+    Backs off progressively so a busy sync gets time to settle, and
+    re-raises the original error if it never does.
+    """
+    delay = first_delay
+    last = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return action()
+        except PermissionError as e:          # WinError 5
+            last = e
+        except OSError as e:
+            # WinError 32 (file in use) and 33 (lock violation) are the
+            # same class of problem. Anything else is a real failure.
+            if getattr(e, "winerror", None) not in (5, 32, 33):
+                raise
+            last = e
+
+        if attempt < attempts:
+            time.sleep(delay)
+            delay *= 2
+
+    _log(f"_retry_on_transient: {what} still failing after {attempts} attempts: {last}")
+    raise last
+
+
+def _makedirs_retry(path):
+    _retry_on_transient(lambda: os.makedirs(path, exist_ok=True),
+                        what=f"create folder {path}")
+
+
 def _copy_tracked(src, dest, job):
     """Copy one file and count it toward the job's progress."""
     _job_check_cancel(job)
-    shutil.copy2(src, dest)
+    _retry_on_transient(lambda: shutil.copy2(src, dest),
+                        what=f"copy {os.path.basename(src)}")
     _job_bump(job, _safe_size(src))
 
 
@@ -1572,7 +1613,7 @@ def _run_upload_job(job):
         root, "01-projects", *shot_parts,
         "smAnim", "export", "publish", "media",
     )
-    os.makedirs(media_dir, exist_ok=True)
+    _makedirs_retry(media_dir)
 
     for layer in layers:
         _job_check_cancel(job)
@@ -1612,7 +1653,7 @@ def _run_upload_job(job):
         if prod.get("enabled") and prod.get("paths"):
             try:
                 prod_dir = os.path.join(media_dir, f"{base_name}-productionData")
-                os.makedirs(prod_dir, exist_ok=True)
+                _makedirs_retry(prod_dir)
                 copied = 0
                 for src in prod["paths"]:
                     _copy_tracked(src, os.path.join(prod_dir, os.path.basename(src)), job)
@@ -1645,7 +1686,7 @@ def _copy_sequence_tracked(media_dir, base_name, section, job):
     ext = os.path.splitext(paths[0])[1].lstrip(".").lower() or "seq"
 
     seq_folder = os.path.join(media_dir, base_name, ext)
-    os.makedirs(seq_folder, exist_ok=True)
+    _makedirs_retry(seq_folder)
 
     start_frame = 1001 - handle_front
     ordered = sorted(paths)
@@ -1780,7 +1821,7 @@ def _run_archive_job(job):
             continue
 
         try:
-            os.makedirs(dest_folder, exist_ok=True)
+            _makedirs_retry(dest_folder)
             with zipfile.ZipFile(zip_path, "r") as zf:
                 for zi in zf.infolist():
                     _job_check_cancel(job)
@@ -2101,7 +2142,7 @@ class MnrApi:
             return {"ok": False, "detail": "A folder with that name already exists here"}
 
         try:
-            os.makedirs(dest_folder, exist_ok=True)
+            _makedirs_retry(dest_folder)
             with zipfile.ZipFile(zip_path, "r") as zf:
                 zf.extractall(dest_folder)
             _log(f"dearchive_zip: extracted to {dest_folder}")
@@ -3109,7 +3150,7 @@ class MnrApi:
                 root, "01-projects", *payload["shot_parts"],
                 "smAnim", "export", "publish", "media",
             )
-            os.makedirs(media_dir, exist_ok=True)
+            _makedirs_retry(media_dir)
         except Exception as e:
             _log(f"upload_layer_publish: could not prepare media folder: {e}")
             return {"ok": False, "detail": f"Could not prepare the media folder: {e}"}
@@ -3145,7 +3186,7 @@ class MnrApi:
         if prod.get("enabled") and prod.get("paths"):
             try:
                 prod_dir = os.path.join(media_dir, f"{base_name}-productionData")
-                os.makedirs(prod_dir, exist_ok=True)
+                _makedirs_retry(prod_dir)
                 copied = 0
                 for src in prod["paths"]:
                     dest = os.path.join(prod_dir, os.path.basename(src))
@@ -3259,7 +3300,7 @@ class MnrApi:
         ext = os.path.splitext(paths[0])[1].lstrip(".").lower() or "seq"
 
         seq_folder = os.path.join(media_dir, base_name, ext)
-        os.makedirs(seq_folder, exist_ok=True)
+        _makedirs_retry(seq_folder)
 
         start_frame = 1001 - handle_front
         copied = 0
