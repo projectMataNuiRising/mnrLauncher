@@ -1555,7 +1555,8 @@ def _upload_total_bytes(payload):
     return total
 
 
-def _retry_on_transient(action, attempts=5, first_delay=0.4, what="operation"):
+def _retry_on_transient(action, attempts=12, first_delay=1.0, max_delay=30.0,
+                        what="operation", job=None):
     """
     Retries a filesystem action that hit a transient Windows error.
 
@@ -1565,8 +1566,16 @@ def _retry_on_transient(action, attempts=5, first_delay=0.4, what="operation"):
     nothing is wrong with permissions. The give-away is that the same
     operation succeeds moments later.
 
-    Backs off progressively so a busy sync gets time to settle, and
-    re-raises the original error if it never does.
+    The backoff is deliberately patient. A full stop motion upload can
+    push 8GB or more, and pCloud stays busy for minutes afterwards, so
+    waiting a few minutes is far better than handing the artist a
+    half-finished upload they have to reassemble by hand. The delay
+    doubles but is capped, giving roughly three and a half minutes
+    across all attempts.
+
+    Only the Windows error codes that genuinely mean "busy right now"
+    are retried. A real problem, like a missing source file, is raised
+    straight away rather than being hidden behind minutes of waiting.
     """
     delay = first_delay
     last = None
@@ -1576,30 +1585,37 @@ def _retry_on_transient(action, attempts=5, first_delay=0.4, what="operation"):
         except PermissionError as e:          # WinError 5
             last = e
         except OSError as e:
-            # WinError 32 (file in use) and 33 (lock violation) are the
-            # same class of problem. Anything else is a real failure.
+            # 32 = file in use, 33 = lock violation. Same family.
             if getattr(e, "winerror", None) not in (5, 32, 33):
                 raise
             last = e
 
         if attempt < attempts:
+            # Say something the first time, so a long pause reads as
+            # "waiting for pCloud" rather than "frozen".
+            if attempt == 1:
+                msg = f"pCloud is busy, waiting to retry: {what}"
+                _log(msg)
+                if job is not None:
+                    _job_line(job, f"  {msg}", "info")
+                    job["current_item"] = f"Waiting for pCloud ({what})"
             time.sleep(delay)
-            delay *= 2
+            delay = min(delay * 2, max_delay)
 
     _log(f"_retry_on_transient: {what} still failing after {attempts} attempts: {last}")
     raise last
 
 
-def _makedirs_retry(path):
+def _makedirs_retry(path, job=None):
     _retry_on_transient(lambda: os.makedirs(path, exist_ok=True),
-                        what=f"create folder {path}")
+                        what=f"create folder {os.path.basename(path)}", job=job)
 
 
 def _copy_tracked(src, dest, job):
     """Copy one file and count it toward the job's progress."""
     _job_check_cancel(job)
     _retry_on_transient(lambda: shutil.copy2(src, dest),
-                        what=f"copy {os.path.basename(src)}")
+                        what=f"copy {os.path.basename(src)}", job=job)
     _job_bump(job, _safe_size(src))
 
 
@@ -1613,7 +1629,7 @@ def _run_upload_job(job):
         root, "01-projects", *shot_parts,
         "smAnim", "export", "publish", "media",
     )
-    _makedirs_retry(media_dir)
+    _makedirs_retry(media_dir, job)
 
     for layer in layers:
         _job_check_cancel(job)
@@ -1653,7 +1669,7 @@ def _run_upload_job(job):
         if prod.get("enabled") and prod.get("paths"):
             try:
                 prod_dir = os.path.join(media_dir, f"{base_name}-productionData")
-                _makedirs_retry(prod_dir)
+                _makedirs_retry(prod_dir, job)
                 copied = 0
                 for src in prod["paths"]:
                     _copy_tracked(src, os.path.join(prod_dir, os.path.basename(src)), job)
@@ -1686,7 +1702,7 @@ def _copy_sequence_tracked(media_dir, base_name, section, job):
     ext = os.path.splitext(paths[0])[1].lstrip(".").lower() or "seq"
 
     seq_folder = os.path.join(media_dir, base_name, ext)
-    _makedirs_retry(seq_folder)
+    _makedirs_retry(seq_folder, job)
 
     start_frame = 1001 - handle_front
     ordered = sorted(paths)
