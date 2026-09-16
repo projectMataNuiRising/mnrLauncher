@@ -3040,6 +3040,64 @@ class MnrApi:
     # Job queue
     # --------------------------------------------------------
 
+    def check_upload_conflicts(self, payload):
+        """
+        Reports which files this upload would overwrite, before any of
+        it happens. Called when Upload is pressed so the artist can be
+        asked rather than silently writing over a previous take.
+
+        Only reports things that genuinely already exist, so a normal
+        first upload is never interrupted.
+        """
+        shot_parts = payload.get("shot_parts") or []
+        if not shot_parts:
+            return {"ok": True, "conflicts": []}
+
+        root = get_pcloud_root()
+        media_dir = os.path.join(
+            root, "01-projects", *shot_parts,
+            "smAnim", "export", "publish", "media",
+        )
+
+        conflicts = []
+        for layer in payload.get("layers", []):
+            base_name = layer.get("base_name") or ""
+            if not base_name:
+                continue
+            items = []
+
+            mp4 = layer.get("mp4") or {}
+            if mp4.get("enabled") and (mp4.get("path") or mp4.get("make_from_frames")):
+                src = mp4.get("path")
+                ext = os.path.splitext(src)[1] if src else ".mp4"
+                target = os.path.join(media_dir, f"{base_name}{ext or '.mp4'}")
+                if os.path.isfile(target):
+                    items.append(os.path.basename(target))
+
+            for key in ("raw", "jpeg"):
+                section = layer.get(key) or {}
+                if not section.get("enabled") or not section.get("paths"):
+                    continue
+                ext = os.path.splitext(section["paths"][0])[1].lstrip(".").lower() or key
+                folder = os.path.join(media_dir, base_name, ext)
+                existing = _safe_listdir(folder) or []
+                if existing:
+                    items.append(f"{ext}/ ({len(existing)} existing file(s))")
+
+            prod = layer.get("production_data") or {}
+            if prod.get("enabled") and prod.get("paths"):
+                folder = os.path.join(media_dir, f"{base_name}-productionData")
+                existing = _safe_listdir(folder) or []
+                if existing:
+                    items.append(f"productionData/ ({len(existing)} existing file(s))")
+
+            if items:
+                conflicts.append({"base_name": base_name, "items": items})
+
+        if conflicts:
+            _log(f"check_upload_conflicts: {len(conflicts)} layer(s) would overwrite")
+        return {"ok": True, "conflicts": conflicts}
+
     def submit_upload_job(self, payload):
         """
         Queues a whole Stop Motion Upload (all layers at once) and

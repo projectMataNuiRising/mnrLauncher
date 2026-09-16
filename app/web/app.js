@@ -1052,6 +1052,15 @@ function buildLayerNameCombo(layer, onChange) {
 // Looks at what already exists in export/publish/media for this exact
 // layer name + number + variant, and suggests the next free version
 // number instead of blindly defaulting to v001 every time.
+// Accepts 2, "2", "v2", "V02" and returns "v002". Returns null if
+// there is no number in there at all, so a typo does not silently
+// become v000.
+function normalizeVersion(raw) {
+  const digits = String(raw || "").replace(/\D/g, "");
+  if (!digits) return null;
+  return "v" + String(parseInt(digits, 10)).padStart(3, "0");
+}
+
 async function refreshLayerVersionOptions(layer, versionSelect) {
   const shotPath = currentAutoPath();
   if (shotPath.length !== 5 || !layer.name) return;
@@ -1071,13 +1080,25 @@ async function refreshLayerVersionOptions(layer, versionSelect) {
   const nextVersion = existingVersions.length ? Math.max(...existingVersions) + 1 : 1;
   const suggested = "v" + String(nextVersion).padStart(3, "0");
 
-  versionSelect.innerHTML = "";
-  const opt = document.createElement("option");
-  opt.value = suggested;
-  opt.textContent = existingVersions.length ? `${suggested} (next available)` : `${suggested} (default)`;
-  versionSelect.appendChild(opt);
-  versionSelect.value = suggested;
-  layer.version = suggested;
+  // Only auto-fill while the artist has not set one themselves, so a
+  // deliberate choice is never overwritten by a background refresh.
+  if (!layer.versionTouched) {
+    versionSelect.value = suggested;
+    layer.version = suggested;
+  }
+
+  const note = versionSelect.parentElement
+    ? versionSelect.parentElement.querySelector('[data-role="version-note"]')
+    : null;
+  if (note) {
+    if (!existingVersions.length) {
+      note.textContent = "No existing versions, this will be the first.";
+    } else {
+      const used = existingVersions.sort((a, b) => a - b)
+        .map(v => "v" + String(v).padStart(3, "0")).join(", ");
+      note.textContent = `Already used: ${used}`;
+    }
+  }
 }
 
 // refreshLayerVersionOptions is async (it checks pCloud for existing
@@ -1176,14 +1197,26 @@ function renderLayerStack() {
     const versionLabel = document.createElement("label");
     versionLabel.className = "field-label";
     versionLabel.textContent = "Version";
-    const versionSelect = document.createElement("select");
+    // Editable, not a fixed dropdown. It auto-fills with the next
+    // unused version, but an artist can type an earlier one to
+    // deliberately replace a take. Overwrites get confirmed at upload.
+    const versionSelect = document.createElement("input");
+    versionSelect.type = "text";
     versionSelect.className = "field-select";
     versionSelect.disabled = !layer.name;
+    versionSelect.placeholder = "v001";
     versionSelect.addEventListener("change", () => {
-      layer.version = versionSelect.value;
+      layer.version = normalizeVersion(versionSelect.value) || layer.version;
+      layer.versionTouched = true;
+      versionSelect.value = layer.version;
+      refreshUploadButtonState();
     });
+    const versionNote = document.createElement("div");
+    versionNote.className = "next-note";
+    versionNote.dataset.role = "version-note";
     versionGroup.appendChild(versionLabel);
     versionGroup.appendChild(versionSelect);
+    versionGroup.appendChild(versionNote);
     body.appendChild(versionGroup);
 
     box.appendChild(body);
@@ -1200,12 +1233,14 @@ function renderLayerStack() {
       const padded = numberInput.value.replace(/\D/g, "").padStart(2, "0").slice(-2) || "01";
       layer.number = padded;
       numberInput.value = padded;
+      layer.versionTouched = false;  // identity changed, re-suggest
       updateLayerVersion(layer, versionSelect);
     });
 
     variantInput.addEventListener("change", () => {
       layer.variant = variantInput.value.trim() || "main";
       variantInput.value = layer.variant;
+      layer.versionTouched = false;  // identity changed, re-suggest
       updateLayerVersion(layer, versionSelect);
     });
 
@@ -1807,6 +1842,27 @@ uploadButton.addEventListener("click", async () => {
       production_data: { enabled: layer.productionData.enabled, paths: layer.productionData.paths },
     })),
   };
+
+  // Check what this would replace before doing any of it. A repeat
+  // press, or a version the artist typed that already exists, both
+  // land here rather than silently overwriting a previous take.
+  const check = await window.pywebview.api.check_upload_conflicts(payload);
+  if (check.ok && check.conflicts && check.conflicts.length) {
+    const detail = check.conflicts
+      .map(c => `\n${c.base_name}\n   ` + c.items.join("\n   "))
+      .join("\n");
+    const proceed = confirm(
+      "Some of this has already been uploaded and will be overwritten:\n" +
+      detail +
+      "\n\nOverwrite it?\n\n" +
+      "Pick a different version number on the layer if you meant to keep both."
+    );
+    if (!proceed) {
+      addUploadLine("Upload cancelled, nothing was changed.", "info");
+      refreshUploadButtonState();
+      return;
+    }
+  }
 
   const submitted = await submitJobAndShow(window.pywebview.api.submit_upload_job(payload));
   if (submitted) {
