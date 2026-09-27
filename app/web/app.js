@@ -3499,7 +3499,7 @@ async function refreshPcacheStatus() {
     // own setting, which is far more trustworthy than the default.
     if (s.path_source === "pcloud") bits.push("read from pCloud's settings");
     else if (s.path_source === "chosen") bits.push("you chose this");
-    else bits.push("default guess, pCloud's setting could not be read");
+    else bits.push("default guess: " + (s.config_error || "pCloud's setting could not be read"));
     if (s.preview && s.preview.length) {
       const names = s.preview.slice(0, 5).map(p => p.name).join(", ");
       bits.push(`contains: ${names}${s.file_count > 5 ? ", ..." : ""}`);

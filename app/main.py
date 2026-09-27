@@ -1250,22 +1250,35 @@ def _pcloud_db_connect(authoritative=False):
     """
     path = _pcloud_db_path()
     if not os.path.isfile(path):
+        _log(f"pcloud db: not found at {path}")
         return None, False
 
-    import sqlite3
-    escaped = path.replace("?", "%3f").replace("#", "%23")
+    try:
+        import sqlite3
+    except Exception as e:
+        # Worth logging loudly. main.py is downloaded at runtime, so
+        # PyInstaller never scanned it and cannot know what it imports.
+        # A stdlib module missing from the built exe fails exactly here
+        # and is otherwise invisible.
+        _log(f"pcloud db: sqlite3 is not available in this build ({e})")
+        return None, False
 
+    escaped = path.replace("?", "%3f").replace("#", "%23")
     attempts = [("file:{}?mode=ro".format(escaped), True)]
     if not authoritative:
         attempts.append(("file:{}?immutable=1".format(escaped), False))
 
+    errors = []
     for uri, complete in attempts:
         try:
             con = sqlite3.connect(uri, uri=True, timeout=3)
             con.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()
+            _log(f"pcloud db: opened ({'complete' if complete else 'checkpoint only'})")
             return con, complete
-        except Exception:
-            continue
+        except Exception as e:
+            errors.append(f"{uri.split('?')[-1]}: {e}")
+
+    _log("pcloud db: could not open. " + " | ".join(errors))
     return None, False
 
 
@@ -1325,7 +1338,9 @@ def pcloud_settings_snapshot():
     """
     con, complete = _pcloud_db_connect()
     if con is None:
-        return {"ok": False, "detail": "Could not read pCloud's database"}
+        return {"ok": False, "detail": (
+            "Could not open pCloud's database, see the Debug log for the "
+            "exact reason")}
     try:
         settings = _pcloud_read_settings(con)
     finally:
@@ -3366,12 +3381,19 @@ class MnrApi:
         # set up with the MNR onboarding steps the cache is somewhere
         # else entirely.
         configured = None
+        config_error = None
         try:
             snap = pcloud_settings_snapshot()
             if snap.get("ok"):
                 configured = snap.get("cache_path")
-        except Exception:
-            pass
+                if not configured:
+                    config_error = "pCloud's database has no cache path recorded"
+            else:
+                config_error = snap.get("detail") or "unknown"
+        except Exception as e:
+            config_error = str(e)
+        if config_error:
+            _log(f"pcloud_cache_status: could not read configured cache path: {config_error}")
 
         path = cache_path or configured or _default_pcloud_cache_dir()
         valid, reason = _validate_pcloud_cache_path(path)
@@ -3410,6 +3432,7 @@ class MnrApi:
             "path_source": ("chosen" if cache_path else
                             ("pcloud" if configured else "default_guess")),
             "configured_path": configured,
+            "config_error": config_error,
             "valid": valid,
             "invalid_reason": reason,
             "file_count": files,
