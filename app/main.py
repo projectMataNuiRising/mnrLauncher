@@ -1205,6 +1205,133 @@ def _find_pcloud_process():
     return None
 
 
+def _default_pcloud_cache_dir():
+    """Where pCloud Drive keeps its cache unless the user moved it."""
+    local = os.environ.get("LOCALAPPDATA") or os.path.join(
+        os.path.expanduser("~"), "AppData", "Local")
+    return os.path.join(local, "pCloud", "Cache")
+
+
+def _find_all_pcloud_processes():
+    """
+    Every running pCloud process, not just the first. pCloud can run
+    more than one, and leaving any alive keeps the cache files locked.
+    """
+    if not HAS_PSUTIL:
+        return []
+    found = []
+    for proc in psutil.process_iter(["name", "exe"]):
+        try:
+            name = (proc.info.get("name") or "").lower()
+        except Exception:
+            continue
+        if any(tag in name for tag in _PCLOUD_PROCESS_NAMES):
+            found.append(proc)
+    return found
+
+
+def _validate_pcloud_cache_path(path):
+    """
+    Blocks paths that are dangerous to empty. Deliberately does NOT try
+    to guess whether a folder "looks like" a pCloud cache by its name:
+    the cache lives wherever the artist put it, so a name check would
+    reject perfectly valid custom locations, which is a worse failure
+    than the one it prevents.
+
+    Instead only the genuinely dangerous cases are refused, and the UI
+    shows what is actually inside the folder so a person confirms it.
+    """
+    if not path:
+        return False, "No cache folder given"
+
+    try:
+        full = os.path.normpath(os.path.abspath(path))
+    except Exception:
+        return False, "That path could not be read"
+
+    if not os.path.isdir(full):
+        return False, "That folder does not exist"
+
+    drive, tail = os.path.splitdrive(full)
+    if not tail.strip("\\/"):
+        return False, "That is the root of a drive, not a folder inside one"
+
+    # pCloud creates the P: drive itself, so a cache should never be
+    # there. Kept as a guard anyway: emptying it would delete cloud
+    # files rather than a cache, which is the worst outcome available.
+    try:
+        pcloud_drive, _ = os.path.splitdrive(os.path.normpath(get_pcloud_root()))
+        if pcloud_drive and drive.upper() == pcloud_drive.upper():
+            return False, (f"That folder is on the pCloud drive ({pcloud_drive}), "
+                           "which pCloud creates itself. Deleting there would "
+                           "remove cloud files, not a cache.")
+    except Exception:
+        pass
+
+    lowered = full.lower()
+    home = os.path.normpath(os.path.expanduser("~")).lower()
+    protected = [
+        home,
+        os.path.join(home, "documents"),
+        os.path.join(home, "desktop"),
+        os.path.join(home, "downloads"),
+        os.path.join(home, "pictures"),
+        os.path.join(home, "appdata"),
+        os.path.join(home, "appdata", "local"),
+        os.path.join(home, "appdata", "locallow"),
+        os.path.join(home, "appdata", "roaming"),
+        os.path.normpath(os.environ.get("WINDIR", "C:\\Windows")).lower(),
+        os.path.normpath(os.environ.get("ProgramFiles", "C:\\Program Files")).lower(),
+        os.path.normpath(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")).lower(),
+        os.path.normpath(os.environ.get("ProgramData", "C:\\ProgramData")).lower(),
+    ]
+    if lowered in protected:
+        return False, "That is a system or personal folder, not a cache folder"
+
+    # Also refuse anything that would take a whole user profile or the
+    # Windows folder with it.
+    # Refuse a folder that CONTAINS the user profile or Windows, e.g.
+    # C:\Users. Checks both separators rather than relying on os.sep,
+    # so the rule holds regardless of how the path was written.
+    for guard in (home, os.path.normpath(os.environ.get("WINDIR", "C:\\Windows")).lower()):
+        if not guard or lowered == guard:
+            continue
+        if guard.startswith(lowered + "\\") or guard.startswith(lowered + "/"):
+            return False, "That folder contains your user profile or Windows, far too broad"
+
+    return True, ""
+
+
+def _folder_preview(path, limit=12):
+    """
+    A sample of what is actually in the folder, so the artist can see
+    they picked the right one before anything is deleted. This is the
+    real safeguard for custom cache locations.
+    """
+    entries = []
+    try:
+        for name in sorted(os.listdir(path))[:limit]:
+            full = os.path.join(path, name)
+            kind = "folder" if os.path.isdir(full) else "file"
+            entries.append({"name": name, "kind": kind})
+    except Exception:
+        pass
+    return entries
+
+
+def _folder_stats(path):
+    files = 0
+    size = 0
+    for dirpath, _dirs, names in os.walk(path):
+        for n in names:
+            files += 1
+            try:
+                size += os.path.getsize(os.path.join(dirpath, n))
+            except Exception:
+                pass
+    return files, size
+
+
 def _sample_io_bytes(proc):
     try:
         io = proc.io_counters()
@@ -3039,6 +3166,178 @@ class MnrApi:
     # --------------------------------------------------------
     # Job queue
     # --------------------------------------------------------
+
+    # --------------------------------------------------------
+    # Fix pCloud Cache
+    # --------------------------------------------------------
+
+    def pcloud_cache_status(self, cache_path=None):
+        """
+        Everything the confirmation dialog needs to decide whether it is
+        safe to go ahead: where the cache is, whether pCloud is running,
+        whether it looks busy, and whether a launcher job is mid-write.
+        """
+        path = cache_path or _default_pcloud_cache_dir()
+        valid, reason = _validate_pcloud_cache_path(path)
+
+        files, size, preview = (0, 0, [])
+        if valid:
+            files, size = _folder_stats(path)
+            preview = _folder_preview(path)
+
+        procs = _find_all_pcloud_processes()
+        running = bool(procs)
+
+        exe_path = None
+        for proc in procs:
+            try:
+                exe_path = proc.exe()
+                if exe_path:
+                    break
+            except Exception:
+                continue
+
+        transfer = {"state": "stopped"}
+        if running:
+            try:
+                transfer = self.check_transfer_activity(1.0)
+            except Exception as e:
+                transfer = {"state": "unknown", "detail": str(e)}
+
+        with _JOBS_LOCK:
+            active_jobs = sum(1 for j in _JOBS if j["status"] in ("queued", "running"))
+
+        return {
+            "ok": True,
+            "cache_path": os.path.normpath(path),
+            "is_default": os.path.normpath(path) == os.path.normpath(_default_pcloud_cache_dir()),
+            "valid": valid,
+            "invalid_reason": reason,
+            "file_count": files,
+            "size_bytes": size,
+            "preview": preview,
+            "pcloud_running": running,
+            "pcloud_exe": exe_path,
+            "transfer_state": transfer.get("state", "unknown"),
+            "active_jobs": active_jobs,
+        }
+
+    def pcloud_cache_pick_folder(self):
+        """Lets the artist point at a cache they moved somewhere else."""
+        try:
+            result = webview.windows[0].create_file_dialog(webview.FOLDER_DIALOG)
+        except Exception as e:
+            return {"ok": False, "detail": str(e)}
+        if not result:
+            return {"ok": True, "path": None}
+        return {"ok": True, "path": result[0]}
+
+    def pcloud_cache_fix(self, cache_path, restart_pcloud=True):
+        """
+        Stops pCloud, empties the cache folder, and starts pCloud again
+        so it rebuilds from the server.
+
+        Everything the dialog checked is checked again here, the UI is
+        never trusted on its own for something that deletes files.
+        """
+        valid, reason = _validate_pcloud_cache_path(cache_path)
+        if not valid:
+            return {"ok": False, "detail": reason}
+
+        with _JOBS_LOCK:
+            active = sum(1 for j in _JOBS if j["status"] in ("queued", "running"))
+        if active:
+            return {"ok": False, "detail": (
+                f"{active} launcher job(s) are still writing to the pCloud drive. "
+                "Wait for them to finish in the Jobs panel, then try again.")}
+
+        procs = _find_all_pcloud_processes()
+
+        # Remember how to start it again before it is gone.
+        exe_path = None
+        for proc in procs:
+            try:
+                exe_path = proc.exe()
+                if exe_path:
+                    break
+            except Exception:
+                continue
+
+        # Stop every pCloud process, gently first.
+        if procs:
+            _log(f"pcloud_cache_fix: stopping {len(procs)} pCloud process(es)")
+            for proc in procs:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+            try:
+                gone, alive = psutil.wait_procs(procs, timeout=15)
+            except Exception:
+                alive = procs
+            for proc in alive:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            try:
+                psutil.wait_procs(alive, timeout=10)
+            except Exception:
+                pass
+
+            if _find_all_pcloud_processes():
+                return {"ok": False, "detail": (
+                    "pCloud did not close. Exit it from the tray icon "
+                    "(right click, Exit), then try again.")}
+
+        # Empty the folder but keep the folder itself, pCloud expects it
+        # to be there when it starts.
+        files_before, bytes_before = _folder_stats(cache_path)
+        problems = []
+        for name in os.listdir(cache_path):
+            target = os.path.join(cache_path, name)
+            try:
+                if os.path.isdir(target) and not os.path.islink(target):
+                    _retry_on_transient(lambda t=target: shutil.rmtree(t),
+                                        attempts=6, first_delay=0.5,
+                                        what=f"remove {name}")
+                else:
+                    _retry_on_transient(lambda t=target: os.remove(t),
+                                        attempts=6, first_delay=0.5,
+                                        what=f"remove {name}")
+            except Exception as e:
+                problems.append(f"{name}: {e}")
+
+        files_after, _ = _folder_stats(cache_path)
+        _log(f"pcloud_cache_fix: removed {files_before - files_after} of "
+             f"{files_before} file(s), {len(problems)} problem(s)")
+
+        restarted = False
+        restart_note = ""
+        if restart_pcloud and exe_path and os.path.isfile(exe_path):
+            try:
+                flags = 0
+                if platform.system() == "Windows":
+                    # Detached, so pCloud keeps running if the launcher closes.
+                    flags = 0x00000008 | 0x00000200   # DETACHED_PROCESS | NEW_PROCESS_GROUP
+                subprocess.Popen([exe_path], creationflags=flags, close_fds=True)
+                restarted = True
+            except Exception as e:
+                restart_note = f"Could not restart pCloud automatically: {e}"
+        elif restart_pcloud:
+            restart_note = "pCloud was not running, so start it yourself from the Start menu."
+
+        return {
+            "ok": not problems,
+            "files_removed": files_before - files_after,
+            "bytes_removed": bytes_before,
+            "files_left": files_after,
+            "problems": problems[:10],
+            "pcloud_restarted": restarted,
+            "restart_note": restart_note,
+            "detail": ("Cache cleared." if not problems else
+                       f"Cache mostly cleared, {len(problems)} item(s) could not be removed."),
+        }
 
     def check_upload_conflicts(self, payload):
         """

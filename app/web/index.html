@@ -78,6 +78,67 @@
     </div>
   </div>
 
+  <!-- Fix pCloud Cache. Deletes the local pCloud Drive cache so it
+       rebuilds from the server. Guarded: the artist has to type "yes",
+       and it refuses outright while pCloud or a launcher job is busy. -->
+  <div id="pcache-backdrop" class="popup-backdrop hidden"></div>
+  <div id="pcache-dialog" class="pcache-dialog hidden">
+    <div class="pcache-title">Fix pCloud Cache</div>
+
+    <div class="pcache-section">
+      <div class="pcache-label">When to use this</div>
+      <div class="pcache-text">
+        Use this if folders on the P: drive do not look right, files you know
+        exist are missing or out of date, or someone asked you to run it.
+      </div>
+    </div>
+
+    <div class="pcache-section">
+      <div class="pcache-label">What it does</div>
+      <div class="pcache-text">
+        1. Closes pCloud Drive.<br>
+        2. Deletes pCloud's local cache folder.<br>
+        3. Starts pCloud Drive again, which rebuilds the cache from the server.<br>
+        Nothing on the pCloud server is touched. The first launch afterwards
+        can be slow while the cache refills.
+      </div>
+    </div>
+
+    <div class="pcache-section">
+      <div class="pcache-label">Cache folder</div>
+      <div class="pcache-path" id="pcache-path">Checking...</div>
+      <div class="pcache-path-note" id="pcache-path-note"></div>
+      <button type="button" id="pcache-choose" class="small-button">Choose a different location...</button>
+    </div>
+
+    <div class="pcache-section">
+      <div class="pcache-label">pCloud status</div>
+      <div class="pcache-status" id="pcache-status">Checking...</div>
+    </div>
+
+    <div class="pcache-warning">
+      <strong>Anything not yet uploaded will be lost.</strong>
+      If a file is still uploading to pCloud when this runs, that upload is
+      lost. Only run this when pCloud shows everything is up to date (green).
+      This tool refuses to run while pCloud looks busy or a launcher job is
+      still copying files, but that check is a best guess, so check the
+      pCloud icon yourself too.
+    </div>
+
+    <div class="pcache-section">
+      <div class="pcache-label">Type <code>yes</code> to confirm</div>
+      <input type="text" id="pcache-confirm" class="field-select" autocomplete="off" spellcheck="false">
+    </div>
+
+    <div class="pcache-result hidden" id="pcache-result"></div>
+
+    <div class="pcache-actions">
+      <button type="button" id="pcache-run" class="upload-button" disabled>Clear pCloud Cache</button>
+      <button type="button" id="pcache-refresh" class="upload-button ready hidden">Refresh Launcher</button>
+      <button type="button" id="pcache-cancel" class="small-button">Cancel</button>
+    </div>
+  </div>
+
   <!-- Brief in-app notice, e.g. "Launching Blender..." -->
   <div id="toast" class="toast hidden"></div>
 
@@ -236,6 +297,12 @@
           </span>
           <span class="tile-label">Frames to MP4</span>
           <span id="ffmpeg-tile-badge" class="tile-badge">Checking...</span>
+        </button>
+        <button class="tile" data-tool="pcloud-cache" id="pcloud-cache-tile">
+          <span class="tile-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/><path d="M12 12v4"/><path d="M10 14h4"/></svg>
+          </span>
+          <span class="tile-label">Fix pCloud Cache</span>
         </button>
       </div>
     </div>

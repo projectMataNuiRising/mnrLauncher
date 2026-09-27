@@ -395,6 +395,8 @@ document.querySelectorAll(".tile").forEach(tile => {
     } else if (tool === "archive") {
       showScreen("archive");
       initArchiveScreen();
+    } else if (tool === "pcloud-cache") {
+      openPcacheDialog();
     } else if (tool === "ffmpeg") {
       showScreen("ffmpeg");
       initFfmpegScreen();
@@ -3419,4 +3421,171 @@ async function doLaunchConnected(key) {
     showToast(result.detail, 5000);
     await refreshSoftwareSection();
   }
+}
+
+// ---------------------------------------------------------------
+// Fix pCloud Cache.
+//
+// Empties pCloud Drive's local cache so it rebuilds from the server.
+// The cache lives wherever the artist pointed pCloud at, so the path
+// is detected where possible and pickable otherwise.
+//
+// This deletes files, so it is deliberately awkward: the artist has
+// to read what it does, see the real folder contents, and type "yes".
+// It also refuses outright while pCloud looks busy or a launcher job
+// is still copying, because an in-flight upload lives in that cache
+// and would be lost.
+// ---------------------------------------------------------------
+
+const pcacheBackdrop = document.getElementById("pcache-backdrop");
+const pcacheDialog = document.getElementById("pcache-dialog");
+const pcachePath = document.getElementById("pcache-path");
+const pcachePathNote = document.getElementById("pcache-path-note");
+const pcacheChoose = document.getElementById("pcache-choose");
+const pcacheStatus = document.getElementById("pcache-status");
+const pcacheConfirm = document.getElementById("pcache-confirm");
+const pcacheRun = document.getElementById("pcache-run");
+const pcacheRefresh = document.getElementById("pcache-refresh");
+const pcacheCancel = document.getElementById("pcache-cancel");
+const pcacheResult = document.getElementById("pcache-result");
+
+let pcacheState = null;
+let pcacheCustomPath = null;
+
+function closePcacheDialog() {
+  pcacheDialog.classList.add("hidden");
+  pcacheBackdrop.classList.add("hidden");
+}
+
+pcacheCancel.addEventListener("click", closePcacheDialog);
+pcacheBackdrop.addEventListener("click", closePcacheDialog);
+
+function formatBytes(n) {
+  if (!n) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0, v = n;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+// The run button needs every condition true, not just the typed word.
+function updatePcacheRunState() {
+  const typed = pcacheConfirm.value.trim().toLowerCase() === "yes";
+  const s = pcacheState;
+  const safe = s && s.valid && s.active_jobs === 0 && s.transfer_state !== "active";
+  pcacheRun.disabled = !(typed && safe);
+  pcacheRun.classList.toggle("ready", typed && safe);
+}
+
+pcacheConfirm.addEventListener("input", updatePcacheRunState);
+
+async function refreshPcacheStatus() {
+  pcacheStatus.textContent = "Checking pCloud...";
+  pcacheStatus.className = "pcache-status";
+  pcacheRun.disabled = true;
+
+  const s = await window.pywebview.api.pcloud_cache_status(pcacheCustomPath);
+  pcacheState = s;
+
+  pcachePath.textContent = s.cache_path;
+
+  if (!s.valid) {
+    pcachePathNote.textContent = s.invalid_reason;
+    pcachePathNote.classList.add("bad");
+  } else {
+    pcachePathNote.classList.remove("bad");
+    const bits = [`${s.file_count} file(s), ${formatBytes(s.size_bytes)}`];
+    if (!s.is_default) bits.push("custom location");
+    if (s.preview && s.preview.length) {
+      const names = s.preview.slice(0, 5).map(p => p.name).join(", ");
+      bits.push(`contains: ${names}${s.file_count > 5 ? ", ..." : ""}`);
+    }
+    if (s.file_count === 0) {
+      bits.push("this folder is empty, it may not be the right one");
+    }
+    pcachePathNote.textContent = bits.join("  |  ");
+  }
+
+  // Status line, worst condition wins.
+  if (s.active_jobs > 0) {
+    pcacheStatus.textContent =
+      `Blocked: ${s.active_jobs} launcher job(s) still copying files. Wait for the Jobs panel to finish.`;
+    pcacheStatus.className = "pcache-status blocked";
+  } else if (s.transfer_state === "active") {
+    pcacheStatus.textContent =
+      "Blocked: pCloud looks busy transferring right now. Wait until it says everything is up to date.";
+    pcacheStatus.className = "pcache-status blocked";
+  } else if (!s.pcloud_running) {
+    pcacheStatus.textContent =
+      "pCloud is not running. The cache can be cleared, but it will have to be started manually afterwards.";
+    pcacheStatus.className = "pcache-status busy";
+  } else {
+    pcacheStatus.textContent =
+      "pCloud is running and looks idle. It will be closed, the cache cleared, then started again.";
+    pcacheStatus.className = "pcache-status safe";
+  }
+
+  updatePcacheRunState();
+}
+
+pcacheChoose.addEventListener("click", async () => {
+  const r = await window.pywebview.api.pcloud_cache_pick_folder();
+  if (!r.ok) { showToast(r.detail, 6000); return; }
+  if (!r.path) return;
+  pcacheCustomPath = r.path;
+  await refreshPcacheStatus();
+});
+
+pcacheRun.addEventListener("click", async () => {
+  pcacheRun.disabled = true;
+  pcacheRun.textContent = "Working...";
+  pcacheResult.classList.remove("hidden", "ok", "fail");
+  pcacheResult.textContent = "Closing pCloud and clearing the cache, this can take a moment...";
+
+  const r = await window.pywebview.api.pcloud_cache_fix(pcacheState.cache_path, true);
+
+  pcacheRun.textContent = "Clear pCloud Cache";
+
+  if (!r.ok && r.detail && !r.files_removed) {
+    pcacheResult.classList.add("fail");
+    pcacheResult.textContent = r.detail;
+    pcacheRun.disabled = false;
+    await refreshPcacheStatus();
+    return;
+  }
+
+  const lines = [];
+  lines.push(`Removed ${r.files_removed} file(s), ${formatBytes(r.bytes_removed)}.`);
+  if (r.problems && r.problems.length) {
+    lines.push(`${r.problems.length} item(s) could not be removed, usually still locked: ${r.problems[0]}`);
+  }
+  lines.push(r.pcloud_restarted
+    ? "pCloud has been started again. It is rebuilding its cache now, so the P: drive may be slow or incomplete for a few minutes."
+    : (r.restart_note || "Start pCloud Drive yourself from the Start menu."));
+  lines.push("Once pCloud shows everything is up to date, refresh the launcher so it re-reads the drive.");
+
+  pcacheResult.classList.add(r.problems && r.problems.length ? "fail" : "ok");
+  pcacheResult.innerHTML = lines.join("<br><br>");
+
+  // The launcher stays open on purpose, so the artist can read this.
+  pcacheRefresh.classList.remove("hidden");
+  pcacheRun.classList.add("hidden");
+});
+
+pcacheRefresh.addEventListener("click", async () => {
+  await window.pywebview.api.request_refresh();
+});
+
+async function openPcacheDialog() {
+  pcacheCustomPath = null;
+  pcacheConfirm.value = "";
+  pcacheResult.classList.add("hidden");
+  pcacheResult.textContent = "";
+  pcacheRun.classList.remove("hidden");
+  pcacheRefresh.classList.add("hidden");
+  pcacheRun.textContent = "Clear pCloud Cache";
+
+  pcacheBackdrop.classList.remove("hidden");
+  pcacheDialog.classList.remove("hidden");
+  await refreshPcacheStatus();
 }
