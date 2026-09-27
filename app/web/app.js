@@ -1121,9 +1121,18 @@ async function updateLayerVersion(layer, versionSelect) {
 function renderLayerStack() {
   layerStackEl.innerHTML = "";
 
-  layers.forEach(layer => {
+  layers.forEach((layer, index) => {
     const box = document.createElement("div");
     box.className = "layer-box";
+    // Tint by position in the stack, so it stays stable while editing
+    // and only shifts if layers are reordered.
+    const tint = layerTint(index);
+    box.style.background = tint.background;
+    box.style.borderColor = tint.border;
+    // A stronger spine down the left edge, so everything inside the
+    // box reads as belonging to this layer even when it is expanded
+    // and tall.
+    box.style.borderLeft = `3px solid ${tint.accent}`;
 
     // ---- header: character name + collapse + remove ----
     const header = document.createElement("div");
@@ -1810,6 +1819,23 @@ function refreshUploadButtonState() {
   } else if (blocked) {
     uploadHint.textContent = blockReason;
   }
+}
+
+// Each layer box gets its own faint tint so it is obvious at a glance
+// which fields belong to which layer, especially once a few are open
+// at once. Hues are spaced evenly around the wheel and kept at low
+// saturation against the dark panel, so it reads as a tint rather
+// than a colour-coded status, which would compete with the green and
+// red used for real state elsewhere.
+const LAYER_HUES = [205, 145, 35, 275, 0, 175, 90, 315, 55, 240];
+
+function layerTint(index) {
+  const hue = LAYER_HUES[index % LAYER_HUES.length];
+  return {
+    background: `hsl(${hue} 22% 17%)`,
+    border: `hsl(${hue} 26% 32%)`,
+    accent: `hsl(${hue} 45% 62%)`,
+  };
 }
 
 function buildBaseName(layer) {
