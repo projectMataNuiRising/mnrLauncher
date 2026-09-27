@@ -3495,7 +3495,11 @@ async function refreshPcacheStatus() {
   } else {
     pcachePathNote.classList.remove("bad");
     const bits = [`${s.file_count} file(s), ${formatBytes(s.size_bytes)}`];
-    if (!s.is_default) bits.push("custom location");
+    // Say where the path came from. "pcloud" means we read pCloud's
+    // own setting, which is far more trustworthy than the default.
+    if (s.path_source === "pcloud") bits.push("read from pCloud's settings");
+    else if (s.path_source === "chosen") bits.push("you chose this");
+    else bits.push("default guess, pCloud's setting could not be read");
     if (s.preview && s.preview.length) {
       const names = s.preview.slice(0, 5).map(p => p.name).join(", ");
       bits.push(`contains: ${names}${s.file_count > 5 ? ", ..." : ""}`);
@@ -3514,6 +3518,10 @@ async function refreshPcacheStatus() {
   } else if (s.transfer_state === "active") {
     pcacheStatus.textContent =
       "Blocked: pCloud looks busy transferring right now. Wait until it says everything is up to date.";
+    pcacheStatus.className = "pcache-status blocked";
+  } else if (typeof s.pending_uploads === "number" && s.pending_uploads > 0) {
+    pcacheStatus.textContent =
+      `Blocked: ${s.pending_uploads} file(s) still waiting to upload. Those would be lost.`;
     pcacheStatus.className = "pcache-status blocked";
   } else if (!s.pcloud_running) {
     pcacheStatus.textContent =

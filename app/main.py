@@ -1205,6 +1205,157 @@ def _find_pcloud_process():
     return None
 
 
+# ------------------------------------------------------------
+# Reading pCloud's own local database.
+#
+# pCloud keeps its state in a SQLite database at
+# %LOCALAPPDATA%\pCloud\data.db. It is undocumented, so everything
+# here is defensive: any missing table or renamed column degrades to
+# "unknown" rather than raising, and callers always have a fallback.
+#
+# Two ways to open it:
+#
+#   mode=ro       correct and complete, reads the -wal file too, but
+#                 only works when pCloud is NOT running.
+#   immutable=1   works while pCloud runs, but SKIPS the -wal file, so
+#                 recent changes may be missing.
+#
+# That distinction matters. immutable is fine for a status light and
+# for reading settings that rarely change. It is NOT safe for deciding
+# whether it is safe to delete something, because a pending upload may
+# be sitting unread in the WAL.
+# ------------------------------------------------------------
+
+_PCLOUD_UPLOAD_TASK_TABLES = (
+    "upload_tasks",
+    "fstaskupload",
+    "localfileupload",
+    "uptask_fileupload",
+)
+
+
+def _pcloud_db_path():
+    local = os.environ.get("LOCALAPPDATA") or os.path.join(
+        os.path.expanduser("~"), "AppData", "Local")
+    return os.path.join(local, "pCloud", "data.db")
+
+
+def _pcloud_db_connect(authoritative=False):
+    """
+    Opens pCloud's database read-only.
+
+    authoritative=True demands a complete read including the WAL, which
+    only succeeds with pCloud closed. Returns (connection, is_complete)
+    or (None, False). Never writes.
+    """
+    path = _pcloud_db_path()
+    if not os.path.isfile(path):
+        return None, False
+
+    import sqlite3
+    escaped = path.replace("?", "%3f").replace("#", "%23")
+
+    attempts = [("file:{}?mode=ro".format(escaped), True)]
+    if not authoritative:
+        attempts.append(("file:{}?immutable=1".format(escaped), False))
+
+    for uri, complete in attempts:
+        try:
+            con = sqlite3.connect(uri, uri=True, timeout=3)
+            con.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()
+            return con, complete
+        except Exception:
+            continue
+    return None, False
+
+
+def _pcloud_read_settings(con):
+    """The setting table as a plain dict, empty if unreadable."""
+    out = {}
+    if con is None:
+        return out
+    try:
+        for key, value in con.execute("SELECT id, value FROM setting"):
+            out[str(key)] = value
+    except Exception:
+        pass
+    return out
+
+
+def _pcloud_pending_counts(con):
+    """
+    Rows in each queue table. A missing table is reported as None
+    rather than 0, so "we could not tell" is never mistaken for
+    "nothing pending".
+    """
+    counts = {}
+    if con is None:
+        return counts
+    for table in _PCLOUD_UPLOAD_TASK_TABLES + ("fstask", "task", "pagecachetask"):
+        try:
+            row = con.execute('SELECT COUNT(*) FROM "{}"'.format(table)).fetchone()
+            counts[table] = int(row[0]) if row else None
+        except Exception:
+            counts[table] = None
+    return counts
+
+
+def _pcloud_pending_uploads(counts):
+    """
+    Total queued uploads, and whether that total can be trusted.
+    Only upload tables count: a pending download can simply be
+    fetched again, but an unsent upload exists nowhere else.
+    """
+    total = 0
+    known = False
+    for table in _PCLOUD_UPLOAD_TASK_TABLES:
+        n = counts.get(table)
+        if n is None:
+            continue
+        known = True
+        total += n
+    return total, known
+
+
+def pcloud_settings_snapshot():
+    """
+    The artist's own pCloud configuration, read live. Used to pre-fill
+    the real cache path and to hand their settings back after a reset
+    that would otherwise silently revert them to defaults.
+    """
+    con, complete = _pcloud_db_connect()
+    if con is None:
+        return {"ok": False, "detail": "Could not read pCloud's database"}
+    try:
+        settings = _pcloud_read_settings(con)
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+
+    keep = ("fscachepath", "fscachesize", "language", "ignorepatterns",
+            "isoverlayson", "startminimized", "username", "deviceid")
+    picked = {k: settings.get(k) for k in keep if k in settings}
+
+    size_gb = None
+    try:
+        if picked.get("fscachesize"):
+            size_gb = round(int(picked["fscachesize"]) / (1024.0 ** 3), 1)
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "complete": complete,
+        "cache_path": picked.get("fscachepath") or None,
+        "cache_size_bytes": picked.get("fscachesize"),
+        "cache_size_gb": size_gb,
+        "username": picked.get("username"),
+        "settings": picked,
+    }
+
+
 def _default_pcloud_cache_dir():
     """Where pCloud Drive keeps its cache unless the user moved it."""
     local = os.environ.get("LOCALAPPDATA") or os.path.join(
@@ -2072,10 +2223,43 @@ class MnrApi:
         delta = after - before
         # Threshold is a starting guess, tune it once you've watched real uploads.
         busy = delta > 200_000  # roughly 200 KB moved during the sample window
-        return {
+
+        result = {
             "state": "busy" if busy else "idle",
             "detail": f"{delta} bytes moved during sample",
+            "source": "io",
         }
+
+        # pCloud's own queue is far better than guessing from disk IO,
+        # so use it when it can be read. Note this read skips the WAL
+        # while pCloud is running, so a very recent upload may not
+        # appear yet. Good enough for a status light, deliberately NOT
+        # trusted for the delete guard, which re-reads with pCloud
+        # closed.
+        try:
+            con, complete = _pcloud_db_connect()
+            if con is not None:
+                try:
+                    counts = _pcloud_pending_counts(con)
+                finally:
+                    con.close()
+                pending, known = _pcloud_pending_uploads(counts)
+                if known:
+                    result["pending_uploads"] = pending
+                    result["queue_complete"] = complete
+                    result["source"] = "database"
+                    if pending > 0:
+                        result["state"] = "busy"
+                        result["detail"] = (
+                            f"{pending} file(s) waiting to upload"
+                            + ("" if complete else ", may be slightly behind"))
+                    elif not busy:
+                        result["state"] = "idle"
+                        result["detail"] = "nothing queued to upload"
+        except Exception as e:
+            _log(f"check_transfer_activity: database read skipped ({e})")
+
+        return result
 
     def list_users(self):
         """Reads P:\\00-temp (or the mac equivalent) for the user picker."""
@@ -3177,7 +3361,19 @@ class MnrApi:
         safe to go ahead: where the cache is, whether pCloud is running,
         whether it looks busy, and whether a launcher job is mid-write.
         """
-        path = cache_path or _default_pcloud_cache_dir()
+        # pCloud records where the artist actually put the cache. Prefer
+        # that over the default, which is frequently wrong: on a machine
+        # set up with the MNR onboarding steps the cache is somewhere
+        # else entirely.
+        configured = None
+        try:
+            snap = pcloud_settings_snapshot()
+            if snap.get("ok"):
+                configured = snap.get("cache_path")
+        except Exception:
+            pass
+
+        path = cache_path or configured or _default_pcloud_cache_dir()
         valid, reason = _validate_pcloud_cache_path(path)
 
         files, size, preview = (0, 0, [])
@@ -3211,6 +3407,9 @@ class MnrApi:
             "ok": True,
             "cache_path": os.path.normpath(path),
             "is_default": os.path.normpath(path) == os.path.normpath(_default_pcloud_cache_dir()),
+            "path_source": ("chosen" if cache_path else
+                            ("pcloud" if configured else "default_guess")),
+            "configured_path": configured,
             "valid": valid,
             "invalid_reason": reason,
             "file_count": files,
@@ -3219,6 +3418,8 @@ class MnrApi:
             "pcloud_running": running,
             "pcloud_exe": exe_path,
             "transfer_state": transfer.get("state", "unknown"),
+            "pending_uploads": transfer.get("pending_uploads"),
+            "queue_source": transfer.get("source"),
             "active_jobs": active_jobs,
         }
 
@@ -3289,6 +3490,63 @@ class MnrApi:
                 return {"ok": False, "detail": (
                     "pCloud did not close. Exit it from the tray icon "
                     "(right click, Exit), then try again.")}
+
+        # pCloud is closed now, so its database can finally be read
+        # completely, WAL included. This is the real safety check: the
+        # earlier one in the dialog could not see the WAL and might
+        # have reported an empty queue while uploads were pending.
+        con, complete = _pcloud_db_connect(authoritative=True)
+        if con is None:
+            # Could not verify the upload queue. Do not proceed on a
+            # destructive action just because the check failed: an
+            # unreadable database is a reason to stop, not a pass.
+            if exe_path and os.path.isfile(exe_path):
+                try:
+                    subprocess.Popen([exe_path], close_fds=True)
+                except Exception:
+                    pass
+            return {"ok": False, "detail": (
+                "Could not read pCloud's database to confirm nothing is still "
+                "uploading, so nothing was deleted. pCloud has been restarted. "
+                "Make sure it is fully closed and try again, or check that it "
+                "shows everything is up to date first.")}
+
+        try:
+            counts = _pcloud_pending_counts(con)
+        finally:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+        pending, known = _pcloud_pending_uploads(counts)
+        if not known:
+            # Same reasoning: no readable queue table means unknown,
+            # and unknown is not safe.
+            if exe_path and os.path.isfile(exe_path):
+                try:
+                    subprocess.Popen([exe_path], close_fds=True)
+                except Exception:
+                    pass
+            return {"ok": False, "detail": (
+                "Could not tell whether anything is still waiting to upload, "
+                "so nothing was deleted. pCloud has been restarted. Wait until "
+                "it shows everything is up to date, then try again.")}
+
+        if pending > 0:
+            # Put pCloud back the way it was before refusing.
+            if exe_path and os.path.isfile(exe_path):
+                try:
+                    subprocess.Popen([exe_path], close_fds=True)
+                except Exception:
+                    pass
+            return {"ok": False, "detail": (
+                f"{pending} file(s) are still waiting to upload to pCloud. "
+                "Those would be lost. pCloud has been restarted, let it "
+                "finish uploading, then run this again.")}
+
+        _log(f"pcloud_cache_fix: upload queue verified empty "
+             f"(complete read: {complete})")
 
         # Empty the folder but keep the folder itself, pCloud expects it
         # to be there when it starts.
