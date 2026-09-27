@@ -3477,10 +3477,208 @@ class MnrApi:
             "preview": preview,
             "pcloud_running": running,
             "pcloud_exe": exe_path,
+            "db_path": _pcloud_db_path(),
+            "db_exists": os.path.isfile(_pcloud_db_path()),
+            "db_size_bytes": _safe_size(_pcloud_db_path()),
             "transfer_state": transfer.get("state", "unknown"),
             "pending_uploads": transfer.get("pending_uploads"),
             "queue_source": transfer.get("source"),
             "active_jobs": active_jobs,
+        }
+
+    def pcloud_reset_database(self, clear_cache_too=False):
+        """
+        Deletes pCloud's local index database so it rebuilds from the
+        server. This is the fix for a wrong folder listing: files or
+        folders that exist on pcloud.com and for other artists but do
+        not appear locally.
+
+        The cache folder is a SEPARATE thing and is left alone by
+        default. It holds file contents, not the listing, so deleting
+        it does not fix a listing problem and can mean re-downloading
+        a very large amount of data.
+
+        Deleting the database also discards the artist's pCloud
+        settings, so those are read and returned first, and written to
+        a file they can find afterwards.
+        """
+        db = _pcloud_db_path()
+        folder = os.path.dirname(db)
+        if not os.path.isfile(db):
+            return {"ok": False, "detail": f"No pCloud database found at {db}"}
+
+        with _JOBS_LOCK:
+            active = sum(1 for j in _JOBS if j["status"] in ("queued", "running"))
+        if active:
+            return {"ok": False, "detail": (
+                f"{active} launcher job(s) are still writing to the pCloud drive. "
+                "Wait for them to finish in the Jobs panel, then try again.")}
+
+        # Capture the settings BEFORE anything is deleted, this is the
+        # only chance to record them.
+        snapshot = pcloud_settings_snapshot()
+        saved_settings = snapshot.get("settings", {}) if snapshot.get("ok") else {}
+        cache_path = snapshot.get("cache_path") if snapshot.get("ok") else None
+
+        procs = _find_all_pcloud_processes()
+        exe_path = None
+        for proc in procs:
+            try:
+                exe_path = proc.exe()
+                if exe_path:
+                    break
+            except Exception:
+                continue
+
+        if procs:
+            _log(f"pcloud_reset_database: stopping {len(procs)} process(es)")
+            for proc in procs:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+            try:
+                _gone, alive = psutil.wait_procs(procs, timeout=15)
+            except Exception:
+                alive = procs
+            for proc in alive:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            try:
+                psutil.wait_procs(alive, timeout=10)
+            except Exception:
+                pass
+            if _find_all_pcloud_processes():
+                return {"ok": False, "detail": (
+                    "pCloud did not close. Exit it from the tray icon "
+                    "(right click, Exit), then try again.")}
+
+        # With pCloud closed the database can be read completely,
+        # including the WAL, so the upload queue check is trustworthy.
+        con, complete = _pcloud_db_connect(authoritative=True)
+        if con is None:
+            if exe_path and os.path.isfile(exe_path):
+                try:
+                    subprocess.Popen([exe_path], close_fds=True)
+                except Exception:
+                    pass
+            return {"ok": False, "detail": (
+                "Could not read pCloud's database to confirm nothing is still "
+                "uploading, so nothing was deleted. pCloud has been restarted.")}
+
+        try:
+            counts = _pcloud_pending_counts(con)
+        finally:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+        pending, known = _pcloud_pending_uploads(counts)
+        if not known or pending > 0:
+            if exe_path and os.path.isfile(exe_path):
+                try:
+                    subprocess.Popen([exe_path], close_fds=True)
+                except Exception:
+                    pass
+            reason = (f"{pending} file(s) are still waiting to upload"
+                      if known else
+                      "Could not tell whether anything is still waiting to upload")
+            return {"ok": False, "detail": (
+                f"{reason}, so nothing was deleted. pCloud has been restarted. "
+                "Wait until it shows everything is up to date, then try again.")}
+
+        # Write the settings somewhere the artist will find them, since
+        # the launcher window is not guaranteed to still be open when
+        # they get around to restoring them.
+        notes_path = None
+        try:
+            desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+            if not os.path.isdir(desktop):
+                desktop = os.path.expanduser("~")
+            notes_path = os.path.join(desktop, "pCloud settings to restore.txt")
+            with open(notes_path, "w", encoding="utf-8") as f:
+                f.write("pCloud settings recorded by MNR Launcher\n")
+                f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n\n")
+                f.write("Resetting pCloud's database signs you out and clears\n")
+                f.write("these settings. Set them back in pCloud Drive:\n\n")
+                if cache_path:
+                    f.write(f"  Cache location   : {cache_path}\n")
+                size = saved_settings.get("fscachesize")
+                if size:
+                    try:
+                        f.write(f"  Cache size       : {int(size) // (1024**3)} GB ({size} bytes)\n")
+                    except Exception:
+                        f.write(f"  Cache size       : {size}\n")
+                if saved_settings.get("username"):
+                    f.write(f"  Signed in as     : {saved_settings['username']}\n")
+                f.write("\nSettings are under pCloud Drive > Preferences > Settings.\n")
+                f.write("Set the cache location BEFORE it starts filling the default one.\n")
+        except Exception as e:
+            _log(f"pcloud_reset_database: could not write notes ({e})")
+            notes_path = None
+
+        # Delete the database and its journal files.
+        removed, problems = [], []
+        for name in ("data.db", "data.db-wal", "data.db-shm"):
+            target = os.path.join(folder, name)
+            if not os.path.exists(target):
+                continue
+            try:
+                _retry_on_transient(lambda t=target: os.remove(t),
+                                    attempts=6, first_delay=0.5,
+                                    what=f"remove {name}")
+                removed.append(name)
+            except Exception as e:
+                problems.append(f"{name}: {e}")
+
+        # Only touch the cache if explicitly asked. It is usually huge
+        # and is not what causes a wrong listing.
+        cache_removed = 0
+        if clear_cache_too and cache_path:
+            valid, why = _validate_pcloud_cache_path(cache_path)
+            if valid:
+                before, _ = _folder_stats(cache_path)
+                for name in os.listdir(cache_path):
+                    target = os.path.join(cache_path, name)
+                    try:
+                        if os.path.isdir(target) and not os.path.islink(target):
+                            shutil.rmtree(target)
+                        else:
+                            os.remove(target)
+                    except Exception as e:
+                        problems.append(f"cache/{name}: {e}")
+                after, _ = _folder_stats(cache_path)
+                cache_removed = before - after
+            else:
+                problems.append(f"cache folder skipped: {why}")
+
+        restarted = False
+        if exe_path and os.path.isfile(exe_path):
+            try:
+                flags = 0
+                if platform.system() == "Windows":
+                    flags = 0x00000008 | 0x00000200
+                subprocess.Popen([exe_path], creationflags=flags, close_fds=True)
+                restarted = True
+            except Exception as e:
+                problems.append(f"restart: {e}")
+
+        _log(f"pcloud_reset_database: removed {removed}, cache files {cache_removed}, "
+             f"problems {len(problems)}")
+
+        return {
+            "ok": not problems,
+            "removed": removed,
+            "cache_files_removed": cache_removed,
+            "problems": problems[:10],
+            "pcloud_restarted": restarted,
+            "notes_path": notes_path,
+            "saved_cache_path": cache_path,
+            "saved_cache_size": saved_settings.get("fscachesize"),
+            "username": saved_settings.get("username"),
         }
 
     def pcloud_cache_pick_folder(self):

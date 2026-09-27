@@ -83,7 +83,7 @@
        and it refuses outright while pCloud or a launcher job is busy. -->
   <div id="pcache-backdrop" class="popup-backdrop hidden"></div>
   <div id="pcache-dialog" class="pcache-dialog hidden">
-    <div class="pcache-title">Fix pCloud Cache</div>
+    <div class="pcache-title">Fix pCloud Folder Listing</div>
 
     <div class="pcache-section">
       <div class="pcache-label">When to use this</div>
@@ -97,18 +97,35 @@
       <div class="pcache-label">What it does</div>
       <div class="pcache-text">
         1. Closes pCloud Drive.<br>
-        2. Deletes pCloud's local cache folder.<br>
-        3. Starts pCloud Drive again, which rebuilds the cache from the server.<br>
-        Nothing on the pCloud server is touched. The first launch afterwards
-        can be slow while the cache refills.
+        2. Deletes pCloud's local index database, the list of what files and
+        folders exist.<br>
+        3. Starts pCloud Drive again, which rebuilds that list from the
+        server.<br>
+        Nothing on the pCloud server is touched. pCloud will be slow for a
+        while afterwards while it re-downloads the index.
       </div>
     </div>
 
     <div class="pcache-section">
-      <div class="pcache-label">Cache folder</div>
-      <div class="pcache-path" id="pcache-path">Checking...</div>
-      <div class="pcache-path-note" id="pcache-path-note"></div>
-      <button type="button" id="pcache-choose" class="small-button">Choose a different location...</button>
+      <div class="pcache-label">Database to be deleted</div>
+      <div class="pcache-path" id="pcache-db-path">Checking...</div>
+      <div class="pcache-path-note" id="pcache-db-note"></div>
+    </div>
+
+    <div class="pcache-warning" id="pcache-settings-warning">
+      <strong>You will be signed out of pCloud.</strong>
+      Your pCloud settings live in this database, so they go too. They are
+      written to a text file on your Desktop first, and shown here when it
+      finishes, so you can set them back.
+      <div id="pcache-settings-list" class="pcache-text" style="margin-top:8px"></div>
+    </div>
+
+    <div class="pcache-section">
+      <label class="checkbox-row">
+        <input type="checkbox" id="pcache-also-cache">
+        Also clear the file cache (not usually needed)
+      </label>
+      <div class="pcache-path-note" id="pcache-cache-note"></div>
     </div>
 
     <div class="pcache-section">
@@ -133,7 +150,7 @@
     <div class="pcache-result hidden" id="pcache-result"></div>
 
     <div class="pcache-actions">
-      <button type="button" id="pcache-run" class="upload-button" disabled>Clear pCloud Cache</button>
+      <button type="button" id="pcache-run" class="upload-button" disabled>Reset pCloud Database</button>
       <button type="button" id="pcache-refresh" class="upload-button ready hidden">Refresh Launcher</button>
       <button type="button" id="pcache-cancel" class="small-button">Cancel</button>
     </div>

@@ -3439,9 +3439,11 @@ async function doLaunchConnected(key) {
 
 const pcacheBackdrop = document.getElementById("pcache-backdrop");
 const pcacheDialog = document.getElementById("pcache-dialog");
-const pcachePath = document.getElementById("pcache-path");
-const pcachePathNote = document.getElementById("pcache-path-note");
-const pcacheChoose = document.getElementById("pcache-choose");
+const pcacheDbPath = document.getElementById("pcache-db-path");
+const pcacheDbNote = document.getElementById("pcache-db-note");
+const pcacheSettingsList = document.getElementById("pcache-settings-list");
+const pcacheAlsoCache = document.getElementById("pcache-also-cache");
+const pcacheCacheNote = document.getElementById("pcache-cache-note");
 const pcacheStatus = document.getElementById("pcache-status");
 const pcacheConfirm = document.getElementById("pcache-confirm");
 const pcacheRun = document.getElementById("pcache-run");
@@ -3472,7 +3474,9 @@ function formatBytes(n) {
 function updatePcacheRunState() {
   const typed = pcacheConfirm.value.trim().toLowerCase() === "yes";
   const s = pcacheState;
-  const safe = s && s.valid && s.active_jobs === 0 && s.transfer_state !== "active";
+  const noPending = !(typeof s?.pending_uploads === "number" && s.pending_uploads > 0);
+  const safe = s && s.db_exists && s.active_jobs === 0
+               && s.transfer_state !== "active" && noPending;
   pcacheRun.disabled = !(typed && safe);
   pcacheRun.classList.toggle("ready", typed && safe);
 }
@@ -3484,98 +3488,105 @@ async function refreshPcacheStatus() {
   pcacheStatus.className = "pcache-status";
   pcacheRun.disabled = true;
 
-  const s = await window.pywebview.api.pcloud_cache_status(pcacheCustomPath);
+  const s = await window.pywebview.api.pcloud_cache_status(null);
   pcacheState = s;
 
-  pcachePath.textContent = s.cache_path;
+  // The database is always in the same place, it is not configurable.
+  pcacheDbPath.textContent = s.db_path;
+  pcacheDbNote.textContent = s.db_exists
+    ? `${formatBytes(s.db_size_bytes)} - this is the file list, not your files`
+    : "Not found. pCloud may not be installed for this user.";
 
-  if (!s.valid) {
-    pcachePathNote.textContent = s.invalid_reason;
-    pcachePathNote.classList.add("bad");
-  } else {
-    pcachePathNote.classList.remove("bad");
-    const bits = [`${s.file_count} file(s), ${formatBytes(s.size_bytes)}`];
-    // Say where the path came from. "pcloud" means we read pCloud's
-    // own setting, which is far more trustworthy than the default.
-    if (s.path_source === "pcloud") bits.push("read from pCloud's settings");
-    else if (s.path_source === "chosen") bits.push("you chose this");
-    else bits.push("default guess: " + (s.config_error || "pCloud's setting could not be read"));
-    if (s.preview && s.preview.length) {
-      const names = s.preview.slice(0, 5).map(p => p.name).join(", ");
-      bits.push(`contains: ${names}${s.file_count > 5 ? ", ..." : ""}`);
-    }
-    if (s.file_count === 0) {
-      bits.push("this folder is empty, it may not be the right one");
-    }
-    pcachePathNote.textContent = bits.join("  |  ");
-  }
+  // Show the settings that deleting it will discard.
+  const lines = [];
+  if (s.configured_path) lines.push(`Cache location: ${s.configured_path}`);
+  if (s.file_count) lines.push(`Cache currently holds ${s.file_count} file(s), ${formatBytes(s.size_bytes)}`);
+  pcacheSettingsList.innerHTML = lines.length
+    ? lines.map(l => `&bull; ${l}`).join("<br>")
+    : "&bull; Could not read your pCloud settings, note them down yourself first.";
 
-  // Status line, worst condition wins.
+  // Clearing the cache is optional and usually the wrong thing, so
+  // spell out what it would cost.
+  pcacheCacheNote.textContent = s.configured_path
+    ? `Would delete ${s.file_count} file(s), ${formatBytes(s.size_bytes)} from ${s.configured_path}. `
+      + "This does NOT fix a wrong folder listing, and it all has to download again."
+    : "Cache location unknown, this will be skipped.";
+
   if (s.active_jobs > 0) {
     pcacheStatus.textContent =
       `Blocked: ${s.active_jobs} launcher job(s) still copying files. Wait for the Jobs panel to finish.`;
-    pcacheStatus.className = "pcache-status blocked";
-  } else if (s.transfer_state === "active") {
-    pcacheStatus.textContent =
-      "Blocked: pCloud looks busy transferring right now. Wait until it says everything is up to date.";
     pcacheStatus.className = "pcache-status blocked";
   } else if (typeof s.pending_uploads === "number" && s.pending_uploads > 0) {
     pcacheStatus.textContent =
       `Blocked: ${s.pending_uploads} file(s) still waiting to upload. Those would be lost.`;
     pcacheStatus.className = "pcache-status blocked";
+  } else if (s.transfer_state === "active") {
+    pcacheStatus.textContent =
+      "Blocked: pCloud looks busy transferring right now. Wait until it says everything is up to date.";
+    pcacheStatus.className = "pcache-status blocked";
+  } else if (!s.db_exists) {
+    pcacheStatus.textContent = "No pCloud database found, there is nothing to reset.";
+    pcacheStatus.className = "pcache-status blocked";
   } else if (!s.pcloud_running) {
     pcacheStatus.textContent =
-      "pCloud is not running. The cache can be cleared, but it will have to be started manually afterwards.";
+      "pCloud is not running. The database can be reset, but pCloud will have to be started manually afterwards.";
     pcacheStatus.className = "pcache-status busy";
   } else {
     pcacheStatus.textContent =
-      "pCloud is running and looks idle. It will be closed, the cache cleared, then started again.";
+      "pCloud is running and looks idle. It will be closed, the database reset, then started again.";
     pcacheStatus.className = "pcache-status safe";
   }
 
   updatePcacheRunState();
 }
 
-pcacheChoose.addEventListener("click", async () => {
-  const r = await window.pywebview.api.pcloud_cache_pick_folder();
-  if (!r.ok) { showToast(r.detail, 6000); return; }
-  if (!r.path) return;
-  pcacheCustomPath = r.path;
-  await refreshPcacheStatus();
-});
-
 pcacheRun.addEventListener("click", async () => {
   pcacheRun.disabled = true;
   pcacheRun.textContent = "Working...";
   pcacheResult.classList.remove("hidden", "ok", "fail");
-  pcacheResult.textContent = "Closing pCloud and clearing the cache, this can take a moment...";
+  pcacheResult.textContent = "Closing pCloud and resetting its database, this can take a moment...";
 
-  const r = await window.pywebview.api.pcloud_cache_fix(pcacheState.cache_path, true);
+  const r = await window.pywebview.api.pcloud_reset_database(pcacheAlsoCache.checked);
 
-  pcacheRun.textContent = "Clear pCloud Cache";
+  pcacheRun.textContent = "Reset pCloud Database";
 
-  if (!r.ok && r.detail && !r.files_removed) {
+  if (!r.ok && (!r.removed || r.removed.length === 0)) {
     pcacheResult.classList.add("fail");
-    pcacheResult.textContent = r.detail;
+    pcacheResult.textContent = r.detail || "Nothing was changed.";
     pcacheRun.disabled = false;
     await refreshPcacheStatus();
     return;
   }
 
-  const lines = [];
-  lines.push(`Removed ${r.files_removed} file(s), ${formatBytes(r.bytes_removed)}.`);
-  if (r.problems && r.problems.length) {
-    lines.push(`${r.problems.length} item(s) could not be removed, usually still locked: ${r.problems[0]}`);
+  const out = [];
+  out.push(`Deleted: ${(r.removed || []).join(", ") || "nothing"}.`);
+  if (r.cache_files_removed) out.push(`Also cleared ${r.cache_files_removed} cache file(s).`);
+
+  // The most important part: what they have to put back.
+  const restore = [];
+  if (r.saved_cache_path) restore.push(`Cache location: <b>${r.saved_cache_path}</b>`);
+  if (r.saved_cache_size) {
+    const gb = Math.round(Number(r.saved_cache_size) / (1024 ** 3));
+    if (gb) restore.push(`Cache size: <b>${gb} GB</b>`);
   }
-  lines.push(r.pcloud_restarted
-    ? "pCloud has been started again. It is rebuilding its cache now, so the P: drive may be slow or incomplete for a few minutes."
-    : (r.restart_note || "Start pCloud Drive yourself from the Start menu."));
-  lines.push("Once pCloud shows everything is up to date, refresh the launcher so it re-reads the drive.");
+  if (r.username) restore.push(`Sign in as: <b>${r.username}</b>`);
+  if (restore.length) {
+    out.push("<b>Set these back in pCloud Drive &gt; Preferences &gt; Settings:</b><br>"
+             + restore.map(x => "&nbsp;&nbsp;&bull; " + x).join("<br>"));
+  }
+  if (r.notes_path) out.push(`Also saved to:<br><code>${r.notes_path}</code>`);
+
+  out.push(r.pcloud_restarted
+    ? "pCloud has been started again. It will ask you to sign in, then rebuild its file list, which takes a while."
+    : "Start pCloud Drive yourself from the Start menu.");
+
+  if (r.problems && r.problems.length) {
+    out.push(`Problems: ${r.problems.join("; ")}`);
+  }
 
   pcacheResult.classList.add(r.problems && r.problems.length ? "fail" : "ok");
-  pcacheResult.innerHTML = lines.join("<br><br>");
+  pcacheResult.innerHTML = out.join("<br><br>");
 
-  // The launcher stays open on purpose, so the artist can read this.
   pcacheRefresh.classList.remove("hidden");
   pcacheRun.classList.add("hidden");
 });
@@ -3587,11 +3598,12 @@ pcacheRefresh.addEventListener("click", async () => {
 async function openPcacheDialog() {
   pcacheCustomPath = null;
   pcacheConfirm.value = "";
+  pcacheAlsoCache.checked = false;
   pcacheResult.classList.add("hidden");
   pcacheResult.textContent = "";
   pcacheRun.classList.remove("hidden");
   pcacheRefresh.classList.add("hidden");
-  pcacheRun.textContent = "Clear pCloud Cache";
+  pcacheRun.textContent = "Reset pCloud Database";
 
   pcacheBackdrop.classList.remove("hidden");
   pcacheDialog.classList.remove("hidden");
