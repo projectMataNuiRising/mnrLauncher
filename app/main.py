@@ -177,6 +177,43 @@ def write_dev_settings(dev_app_code, dev_exe):
 _DEBUG_LOG = []
 
 
+# ------------------------------------------------------------
+# Import self-check.
+#
+# This file is downloaded from GitHub at runtime and run inside the
+# compiled shell, so PyInstaller never scanned it and cannot know what
+# it imports. Anything not bundled is simply absent, and the failure
+# surfaces far away from the cause: sqlite3 was missing for a while
+# and the only symptom was the pCloud tool saying it could not read a
+# file.
+#
+# So check at startup and say so plainly. Nothing here is fatal, the
+# features that need a missing module degrade on their own, but the
+# Debug log now names the real problem immediately.
+#
+# Anything added here must also be added to the --hidden-import list
+# in .github/workflows/build.yml, which is what actually bundles it.
+# ------------------------------------------------------------
+
+_REQUIRED_MODULES = (
+    "sqlite3",      # reading pCloud's local database
+    "webbrowser",   # external Launch tiles
+    "re", "json", "shutil", "zipfile", "threading", "tempfile",
+    "subprocess", "platform", "urllib.request", "ctypes",
+)
+
+
+def _check_required_modules():
+    import importlib
+    missing = []
+    for name in _REQUIRED_MODULES:
+        try:
+            importlib.import_module(name)
+        except Exception:
+            missing.append(name)
+    return missing
+
+
 def _log(msg):
     timestamp = time.strftime("%H:%M:%S")
     _DEBUG_LOG.append(f"[{timestamp}] {msg}")
@@ -4052,6 +4089,16 @@ def _bind_dom_events(window):
 
 
 def main():
+    # Say immediately if the shell is missing something this file needs,
+    # rather than letting it surface later as a confusing feature bug.
+    missing = _check_required_modules()
+    if missing:
+        _log("MISSING MODULES in this build: " + ", ".join(missing))
+        _log("   Add them to --hidden-import in .github/workflows/build.yml "
+             "and rebuild the shell. Features needing them will not work.")
+    else:
+        _log("Module check: all required modules present")
+
     api = MnrApi()
     window = webview.create_window(
         APP_NAME,

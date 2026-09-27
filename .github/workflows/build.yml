@@ -57,9 +57,24 @@ jobs:
         run: |
           (Get-Content bootstrap/launcher.py) -replace '0\.0\.0-dev', "${{ github.run_number }}" | Set-Content bootstrap/launcher.py
 
+      # IMPORTANT, read before editing the hidden-import list below.
+      #
+      # app/main.py is NOT compiled into this exe. It is downloaded from
+      # GitHub at runtime and executed with runpy inside this process.
+      # PyInstaller therefore never sees main.py and cannot discover what
+      # it imports, so anything main.py needs that is not reachable from
+      # launcher.py's own imports is simply absent at runtime.
+      #
+      # That is not theoretical: sqlite3 was missing exactly this way,
+      # and the only symptom was a feature quietly claiming it could not
+      # read a file.
+      #
+      # So: if main.py starts importing a new module, add it here.
+      # main.py also logs a warning at startup for anything on its own
+      # required list that failed to import, which is the safety net.
       - name: Build the Windows executable
         run: |
-          pyinstaller --onefile --windowed --name MNR_Launcher --icon=bootstrap/assets/icon.ico --version-file=bootstrap/assets/version_info.txt bootstrap/launcher.py
+          pyinstaller --onefile --windowed --name MNR_Launcher --hidden-import sqlite3 --hidden-import webbrowser --hidden-import csv --hidden-import uuid --hidden-import hashlib --hidden-import base64 --hidden-import math --hidden-import glob --hidden-import fnmatch --hidden-import datetime --hidden-import difflib --hidden-import textwrap --icon=bootstrap/assets/icon.ico --version-file=bootstrap/assets/version_info.txt bootstrap/launcher.py
 
       - name: Upload the build artifact
         uses: actions/upload-artifact@v4
@@ -111,7 +126,7 @@ jobs:
 
       - name: Build the Mac app
         run: |
-          pyinstaller --windowed --name MNR_Launcher --icon=bootstrap/assets/icon.icns bootstrap/launcher.py
+          pyinstaller --windowed --name MNR_Launcher --hidden-import sqlite3 --hidden-import webbrowser --hidden-import csv --hidden-import uuid --hidden-import hashlib --hidden-import base64 --hidden-import math --hidden-import glob --hidden-import fnmatch --hidden-import datetime --hidden-import difflib --hidden-import textwrap --icon=bootstrap/assets/icon.icns bootstrap/launcher.py
           # Ad-hoc self-sign, free, no Apple Developer account needed.
           # Meaningfully reduces Gatekeeper's "app is damaged" false
           # positive that unsigned PyInstaller Mac builds are prone to,
