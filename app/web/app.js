@@ -317,6 +317,7 @@ async function runBoot() {
   refreshBlenderTile();
   refreshRawtherapeeTile();
   refreshFfmpegTile();
+  refreshParsecTile();
   refreshSoftwareSection();
   refreshJobs();
   checkPluginUpdates();
@@ -395,6 +396,8 @@ document.querySelectorAll(".tile").forEach(tile => {
     } else if (tool === "archive") {
       showScreen("archive");
       initArchiveScreen();
+    } else if (tool === "parsec") {
+      handleParsecClick();
     } else if (tool === "pcloud-cache") {
       openPcacheDialog();
     } else if (tool === "ffmpeg") {
@@ -3634,4 +3637,100 @@ async function openPcacheDialog() {
   pcacheBackdrop.classList.remove("hidden");
   pcacheDialog.classList.remove("hidden");
   await refreshPcacheStatus();
+}
+
+// ---------------------------------------------------------------
+// Parsec, remote workstations.
+//
+// Installed by the artist on their own machine rather than run from
+// pCloud, so the tile has a third state the others do not: not
+// installed at all, where clicking sends them to the download page
+// along with what to do next.
+// ---------------------------------------------------------------
+
+const parsecTile = document.getElementById("parsec-tile");
+const parsecTileBadge = document.getElementById("parsec-tile-badge");
+
+let parsecState = null;
+
+async function refreshParsecTile() {
+  try {
+    const info = await window.pywebview.api.get_parsec_info();
+    parsecState = info;
+
+    if (!info.supported) {
+      parsecTile.classList.add("hidden");
+      return;
+    }
+
+    parsecTile.classList.remove("hidden");
+
+    if (info.installed) {
+      parsecTile.classList.remove("tile-disabled");
+      parsecTileBadge.textContent = info.version ? "v" + info.version : "Installed";
+      parsecTileBadge.className = "tile-badge";
+      parsecTile.title = info.path;
+    } else {
+      // Greyed, but still clickable: clicking is how they get it.
+      parsecTile.classList.add("tile-disabled");
+      parsecTileBadge.textContent = "Not installed";
+      parsecTileBadge.className = "tile-badge tile-badge-undetected";
+      parsecTile.title = "Click to download Parsec";
+    }
+  } catch (e) {
+    parsecTile.classList.remove("hidden");
+    parsecTile.classList.add("tile-disabled");
+    parsecTileBadge.textContent = "Not installed";
+  }
+}
+
+async function handleParsecClick() {
+  if (parsecState && parsecState.installed) {
+    const result = await window.pywebview.api.launch_parsec();
+    if (result.ok) {
+      showToast("Launching Parsec...", 4000);
+    } else {
+      showToast(result.detail, 6000);
+      await refreshParsecTile();
+    }
+    return;
+  }
+
+  // Not installed. Offer the download, or locating an existing copy
+  // the search missed.
+  const proceed = confirm(
+    "Parsec is not installed on this machine.\n\n" +
+    "Parsec is what we use to connect to the MNR remote workstations.\n\n" +
+    "Clicking OK opens the Parsec download page in your browser.\n\n" +
+    "After installing it, ask the Technical Director to grant you access " +
+    "to the remote workstations. Installing Parsec on its own does not " +
+    "give you access.\n\n" +
+    "Already have it installed somewhere unusual? Press Cancel and use " +
+    "the Debug panel to locate it manually."
+  );
+
+  if (!proceed) {
+    const locate = confirm(
+      "Locate an existing Parsec installation?\n\n" +
+      "Pick parsecd.exe, normally in C:\\Program Files\\Parsec."
+    );
+    if (locate) {
+      const r = await window.pywebview.api.browse_for_parsec();
+      if (!r.ok) {
+        showToast(r.detail, 6000);
+      } else if (!r.cancelled) {
+        showToast("Parsec located.", 3500);
+        await refreshParsecTile();
+      }
+    }
+    return;
+  }
+
+  const r = await window.pywebview.api.open_parsec_download();
+  if (r.ok) {
+    showToast("Opening the Parsec download page. Install it, then ask the "
+              + "Technical Director for remote workstation access.", 9000);
+  } else {
+    showToast(r.detail, 6000);
+  }
 }

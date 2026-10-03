@@ -388,6 +388,48 @@ def _resolve_ffmpeg_paths():
     return None
 
 
+# ------------------------------------------------------------
+# Parsec, for remote workstations.
+#
+# Unlike Blender and RawTherapee this is not a portable build on
+# pCloud, it is installed normally on the artist's own machine, so
+# detection is a handful of fixed paths rather than a scan. Parsec
+# does not use a versioned install folder, the version comes from the
+# executable itself.
+#
+# A manually located path is remembered, the same way the Connect
+# Software tiles allow, for anyone who installed it somewhere unusual.
+# ------------------------------------------------------------
+
+PARSEC_DOWNLOAD_URL = "https://parsec.app/downloads"
+
+_PARSEC_EXE_NAME = "parsecd.exe"
+
+
+def _parsec_search_paths():
+    local = os.environ.get("LOCALAPPDATA") or os.path.join(
+        os.path.expanduser("~"), "AppData", "Local")
+    roaming = os.environ.get("APPDATA") or os.path.join(
+        os.path.expanduser("~"), "AppData", "Roaming")
+    return [
+        r"C:\Program Files\Parsec\parsecd.exe",
+        r"C:\Program Files (x86)\Parsec\parsecd.exe",
+        os.path.join(local, "Parsec", _PARSEC_EXE_NAME),
+        os.path.join(roaming, "Parsec", _PARSEC_EXE_NAME),
+    ]
+
+
+def _resolve_parsec_path():
+    """A remembered path wins, otherwise the usual install locations."""
+    saved = read_local_state().get("parsec_path")
+    if saved and os.path.isfile(saved):
+        return saved, "saved"
+    for candidate in _parsec_search_paths():
+        if os.path.isfile(candidate):
+            return candidate, "found"
+    return None, "missing"
+
+
 _FFMPEG_VERSION_RE = re.compile(r"ffmpeg-([\d.]+)", re.IGNORECASE)
 
 
@@ -2615,6 +2657,82 @@ class MnrApi:
     # --------------------------------------------------------
     # Frames to MP4 tool
     # --------------------------------------------------------
+
+    def get_parsec_info(self):
+        """
+        Whether Parsec is installed, and which version. Installed
+        locally by the artist rather than run from pCloud, so this is
+        a path check rather than a pipeline folder scan.
+        """
+        if platform.system() != "Windows":
+            return {"ok": False, "installed": False, "supported": False,
+                    "detail": "Windows only for now"}
+
+        path, how = _resolve_parsec_path()
+        if not path:
+            return {"ok": True, "installed": False, "supported": True,
+                    "download_url": PARSEC_DOWNLOAD_URL}
+
+        version = _exe_file_version(path)
+        return {
+            "ok": True,
+            "installed": True,
+            "supported": True,
+            "path": path,
+            "source": how,
+            "version": version or "",
+        }
+
+    def launch_parsec(self):
+        path, _how = _resolve_parsec_path()
+        if not path:
+            return {"ok": False, "installed": False,
+                    "detail": "Parsec is not installed"}
+        try:
+            subprocess.Popen([path], cwd=os.path.dirname(path))
+            _log(f"launch_parsec: {path}")
+            return {"ok": True}
+        except Exception as e:
+            _log(f"launch_parsec failed: {e}")
+            return {"ok": False, "detail": str(e)}
+
+    def browse_for_parsec(self):
+        """
+        Manual fallback for an install in an unusual place. Checks the
+        chosen file really is parsecd.exe rather than trusting the
+        pick, then remembers it.
+        """
+        try:
+            result = webview.windows[0].create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=False,
+                file_types=("Parsec (parsecd.exe)", "All files (*.*)"),
+            )
+        except Exception as e:
+            return {"ok": False, "detail": str(e)}
+
+        if not result:
+            return {"ok": True, "cancelled": True}
+
+        chosen = result[0]
+        if os.path.basename(chosen).lower() != _PARSEC_EXE_NAME:
+            return {"ok": False, "detail": (
+                "That is not %s. Pick the Parsec program file itself."
+                % _PARSEC_EXE_NAME)}
+
+        state = read_local_state()
+        state["parsec_path"] = chosen
+        write_local_state(state)
+        _log(f"browse_for_parsec: remembered {chosen}")
+        return {"ok": True, "cancelled": False, "path": chosen}
+
+    def open_parsec_download(self):
+        try:
+            webbrowser.open(PARSEC_DOWNLOAD_URL)
+            _log("open_parsec_download")
+            return {"ok": True, "url": PARSEC_DOWNLOAD_URL}
+        except Exception as e:
+            return {"ok": False, "detail": str(e)}
 
     def get_ffmpeg_info(self):
         if platform.system() != "Windows":
