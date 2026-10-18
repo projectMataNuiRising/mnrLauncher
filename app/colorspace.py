@@ -172,9 +172,34 @@ def probe_frame(path, probe_exe=None):
 
     bps = _first(tags.get(258), 8)
     sf = _first(tags.get(339), 1)                   # 1 = uint, 3 = IEEE float
+    predictor = _first(tags.get(317), 1)
     out["bit_depth"] = bps
     out["is_float"] = (sf == 3)
     out["is_half"] = (sf == 3 and bps == 16)
+    out["predictor"] = predictor
+
+    if predictor == 3:
+        # TIFF predictor 3 is the floating-point predictor: the bytes of
+        # each row are split into planes (all the high bytes, then all
+        # the low bytes) and delta encoded before compression.
+        #
+        # ffmpeg's TIFF decoder does not implement it. The damning part
+        # is that it does not fail either - it prints "unsupported
+        # floating point pixel format", exits 0, and hands back the
+        # still-shuffled bytes. Rendered, that is the image split down
+        # the middle with one byte plane either side, which is useless
+        # but looks enough like a picture to be mistaken for a colour
+        # problem.
+        #
+        # RawTherapee writes this whenever it saves compressed float
+        # TIFF, so it is the normal output, not an edge case.
+        out["supported"] = False
+        out["note"] = ("This TIFF uses the floating-point predictor, which "
+                       "ffmpeg cannot decode - it would silently produce a "
+                       "scrambled video. In RawTherapee, either tick "
+                       "\"Uncompressed TIFF\" or save 16-bit integer "
+                       "instead of 16-bit float. EXR also works.")
+        return out
 
     if sf == 3 and bps == 32:
         # ffmpeg decodes these as packed rgbf32le, which swscale has no I/O
@@ -373,15 +398,37 @@ def preview_pair(ffmpeg, frame_path, input_cs, output_cs,
 
         out = {}
         for side, chain in (("left", left_chain), ("right", right_chain)):
-            png = _run_to_png(ffmpeg, frame_path, ",".join(chain))
+            png, why = _run_to_png(ffmpeg, frame_path, ",".join(chain))
             if png is None:
-                return {"error": "ffmpeg could not render the preview.",
+                return {"error": why or "ffmpeg could not render the preview.",
                         "info": info}
             out[side] = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
         out["info"] = info
         return out
     except Exception as exc:
         return {"error": str(exc), "info": info}
+
+
+# Things ffmpeg says when it has decoded something badly but is still
+# going to exit 0 and hand over a picture. Treating these as success is
+# how a scrambled frame reaches the artist looking like a colour bug.
+_DECODER_FAILURE_PHRASES = (
+    "unsupported",
+    "could not find codec parameters",
+    "invalid data found",
+    "error while decoding",
+)
+
+
+def decoder_complaint(stderr_text):
+    """Return the first line of ffmpeg output that means 'do not trust this'."""
+    if not stderr_text:
+        return None
+    for line in stderr_text.splitlines():
+        low = line.lower()
+        if any(p in low for p in _DECODER_FAILURE_PHRASES):
+            return line.strip()
+    return None
 
 
 def _run_to_png(ffmpeg, src, filters):
@@ -392,5 +439,12 @@ def _run_to_png(ffmpeg, src, filters):
         p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                            timeout=45, creationflags=CREATE_NO_WINDOW)
     except Exception:
-        return None
-    return p.stdout if p.returncode == 0 and p.stdout else None
+        return None, "ffmpeg could not be run."
+    err = p.stderr.decode("utf-8", "replace") if p.stderr else ""
+    complaint = decoder_complaint(err)
+    if complaint:
+        # Exit code 0 is not good enough on its own.
+        return None, complaint
+    if p.returncode != 0 or not p.stdout:
+        return None, (err.strip().splitlines() or ["ffmpeg failed."])[-1]
+    return p.stdout, None

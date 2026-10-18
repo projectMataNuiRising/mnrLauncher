@@ -1358,13 +1358,29 @@ def _run_ffmpeg_worker(exe_path, folder_path, seq, framerate, bitrate_kbps,
             text=True,
             bufsize=1,
         )
+        complaint = None
         for line in process.stdout:
             m = _FFMPEG_FRAME_LOG_RE.search(line)
             if m:
                 _FFMPEG_PROGRESS["current_frame"] = int(m.group(1))
+            elif complaint is None and HAS_COLORSPACE:
+                # ffmpeg can decode a frame badly, say so once, and still
+                # exit 0 with a finished file. Exit code alone is not
+                # enough to call a render good.
+                complaint = colorspace.decoder_complaint(line)
         process.wait()
 
-        if process.returncode == 0 and os.path.isfile(output_path):
+        if complaint:
+            _FFMPEG_PROGRESS["ok"] = False
+            _FFMPEG_PROGRESS["detail"] = (
+                f"ffmpeg could not decode these frames correctly "
+                f"({complaint}). The video was not kept.")
+            try:
+                if os.path.isfile(output_path):
+                    os.remove(output_path)
+            except Exception:
+                pass
+        elif process.returncode == 0 and os.path.isfile(output_path):
             _FFMPEG_PROGRESS["ok"] = True
             _FFMPEG_PROGRESS["detail"] = os.path.basename(output_path)
         else:
@@ -2920,6 +2936,7 @@ class MnrApi:
                     "bit_depth": info["bit_depth"],
                     "is_float": info["is_float"],
                     "is_half": info["is_half"],
+                    "predictor": info.get("predictor"),
                     "decoded_pix_fmt": info.get("decoded_pix_fmt"),
                     "needs_half_lut": info.get("needs_half_lut", False),
                     "supported": info["supported"],
@@ -3018,7 +3035,21 @@ class MnrApi:
             return {"ok": False, "detail": "A file with that output name already exists"}
 
         # Fail here, with a message the artist can act on, rather than
-        # letting ffmpeg die halfway through a long sequence.
+        # letting ffmpeg die halfway through a long sequence - or worse,
+        # finish one and hand over a scrambled video.
+        if HAS_COLORSPACE:
+            try:
+                ff_paths = _resolve_ffmpeg_paths()
+                probe_info = colorspace.probe_frame(
+                    os.path.join(folder_path, seq["first_file"]),
+                    probe_exe=ff_paths.get("probe_path") if ff_paths else None)
+                if not probe_info.get("supported", True):
+                    return {"ok": False,
+                            "detail": probe_info.get("note")
+                            or "These frames cannot be processed by ffmpeg."}
+            except Exception as e:
+                print(f"[mnr] pre-render format check failed: {e}")
+
         if color_opts and color_opts.get("enabled"):
             _, _, color_error = _build_ffmpeg_video_filters(
                 folder_path, seq, scale_percent, color_opts)
