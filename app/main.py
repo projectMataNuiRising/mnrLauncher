@@ -1306,7 +1306,10 @@ def _build_ffmpeg_video_filters(folder_path, seq, scale_percent, color_opts):
         return None, None, "Colour-space support is not available in this build."
 
     first_frame = os.path.join(folder_path, seq["first_file"])
-    info = colorspace.probe_frame(first_frame)
+    ff_paths = _resolve_ffmpeg_paths()
+    info = colorspace.probe_frame(
+        first_frame,
+        probe_exe=ff_paths.get("probe_path") if ff_paths else None)
     try:
         filters, flags = colorspace.build_filters(
             color_opts.get("input", "srgb"),
@@ -2903,12 +2906,17 @@ class MnrApi:
         # a sensible input colour space and warn about formats ffmpeg
         # cannot process before the artist hits Render.
         if HAS_COLORSPACE:
-            info = colorspace.probe_frame(first_file_path)
+            ff = _resolve_ffmpeg_paths()
+            info = colorspace.probe_frame(
+                first_file_path,
+                probe_exe=ff.get("probe_path") if ff else None)
             result["color"] = {
                 "kind": info["kind"],
                 "bit_depth": info["bit_depth"],
                 "is_float": info["is_float"],
                 "is_half": info["is_half"],
+                "decoded_pix_fmt": info.get("decoded_pix_fmt"),
+                "needs_half_lut": info.get("needs_half_lut", False),
                 "supported": info["supported"],
                 "note": info["note"],
                 "suggested_input": "acescg" if info["is_float"] else "srgb",
@@ -2956,7 +2964,8 @@ class MnrApi:
         frame_path = os.path.join(folder_path, seq["first_file"])
         result = colorspace.preview_pair(
             paths["exe_path"], frame_path, input_cs, output_cs,
-            width=width, cache_dir=_colorspace_cache_dir())
+            width=width, cache_dir=_colorspace_cache_dir(),
+            probe_exe=paths.get("probe_path"))
 
         if "error" in result:
             return {"ok": False, "detail": result["error"]}

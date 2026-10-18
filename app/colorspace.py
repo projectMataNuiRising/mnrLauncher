@@ -87,20 +87,59 @@ def _first(value, default=None):
     return default if value is None else value
 
 
-def probe_frame(path):
+def decoded_pix_fmt(probe_exe, path):
+    """
+    Ask ffmpeg what pixel format it ACTUALLY decodes this file to.
+
+    This matters because ffmpeg builds disagree about half-float TIFF.
+    Some decode it properly to a float format; others hand back
+    rgb48le, having treated each 16-bit half bit pattern as an
+    unsigned integer. The repair LUT is only correct for the second
+    kind, and applying it to the first kind destroys the image, so
+    guessing from the TIFF tags alone is not good enough - the decoder
+    itself has to be asked.
+
+    Returns the pix_fmt string, or None if ffprobe is unavailable.
+    """
+    if not probe_exe or not os.path.isfile(probe_exe):
+        return None
+    try:
+        result = subprocess.run(
+            [probe_exe, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=pix_fmt", "-of", "csv=p=0", path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=30, creationflags=CREATE_NO_WINDOW,
+        )
+        if result.returncode != 0:
+            return None
+        fmt = result.stdout.decode("utf-8", "replace").strip()
+        return fmt or None
+    except Exception:
+        return None
+
+
+def _is_float_pix_fmt(fmt):
+    """True when ffmpeg decoded to a real floating-point format."""
+    return bool(fmt) and ("f32" in fmt or "f16" in fmt)
+
+
+def probe_frame(path, probe_exe=None):
     """
     Work out what a frame really is, so the filter chain can be built correctly.
 
     Returns a dict with:
-        kind        'exr' | 'tiff' | 'ldr'
-        bit_depth   8 / 16 / 32 (None if unknown)
-        is_float    True for IEEE float samples
-        is_half     True for 16-bit float specifically - needs the LUT
-        supported   False means ffmpeg physically cannot process it
-        note        plain-English reason when unsupported
+        kind            'exr' | 'tiff' | 'ldr'
+        bit_depth       8 / 16 / 32 (None if unknown)
+        is_float        True for IEEE float samples
+        is_half         True for 16-bit float samples
+        decoded_pix_fmt what ffmpeg really decodes this to, when known
+        needs_half_lut  True only when this build misreads half as int
+        supported       False means ffmpeg physically cannot process it
+        note            plain-English reason when unsupported
     """
     ext = os.path.splitext(path)[1].lower()
     out = {"kind": "ldr", "bit_depth": 8, "is_float": False, "is_half": False,
+           "decoded_pix_fmt": None, "needs_half_lut": False,
            "supported": True, "note": ""}
 
     if ext == ".exr":
@@ -128,14 +167,34 @@ def probe_frame(path):
         out["supported"] = False
         out["note"] = ("32-bit float TIFF cannot be processed by ffmpeg. "
                        "Render EXR, or 16-bit TIFF, instead.")
+        return out
+
+    if out["is_half"]:
+        # Only this build's own decoder can settle whether the repair
+        # LUT is needed. A float pix_fmt means it decoded correctly and
+        # the LUT must NOT be applied; an integer one means it read the
+        # half bit patterns as integers and the LUT fixes that.
+        fmt = decoded_pix_fmt(probe_exe, path)
+        out["decoded_pix_fmt"] = fmt
+        if fmt is None:
+            # Cannot ask, so do not guess. Leaving the LUT off is the
+            # safe side: a missing repair is a flat image, a wrongly
+            # applied one is unusable.
+            out["needs_half_lut"] = False
+            out["note"] = ("Could not confirm how ffmpeg reads this "
+                           "16-bit float TIFF (ffprobe not found), so no "
+                           "correction was applied. Check the preview.")
+        else:
+            out["needs_half_lut"] = not _is_float_pix_fmt(fmt)
+
     return out
 
 
-def probe_sequence(paths):
+def probe_sequence(paths, probe_exe=None):
     """Probe the first frame and assume the sequence is homogeneous."""
     if not paths:
         return None
-    return probe_frame(paths[0])
+    return probe_frame(paths[0], probe_exe=probe_exe)
 
 
 # ------------------------------------------------ half-float decoding LUT
@@ -218,15 +277,18 @@ def build_filters(input_cs, output_cs, info, extra=None, cache_dir=None):
 
     chain = []
 
-    # Half-float TIFF must be repaired before anything else touches it.
-    if info and info.get("is_half"):
+    # Only repair half-float TIFF on builds that actually misread it.
+    # probe_frame decides that by asking the decoder, never by guessing
+    # from the file's tags.
+    repair_half = bool(info and info.get("needs_half_lut"))
+    if repair_half:
         lut = ensure_half_lut(cache_dir)
         chain.append("format=gbrpf32le")
         chain.append("lut1d=file='%s':interp=nearest" % _escape_for_filter(lut))
 
     flags = []
     if mode == "matrix":
-        if not (info and info.get("is_half")):
+        if not repair_half:
             chain.append("format=gbrpf32le")        # work in float
         chain.append(_mixer(AP1_TO_REC709))         # AP1 -> Rec.709 primaries
         chain.append(                               # linear -> sRGB curve
@@ -249,7 +311,7 @@ def build_filters(input_cs, output_cs, info, extra=None, cache_dir=None):
 # -------------------------------------------------------------- UI previews
 
 def preview_pair(ffmpeg, frame_path, input_cs, output_cs,
-                 width=480, cache_dir=None):
+                 width=480, cache_dir=None, probe_exe=None):
     """
     Render the two preview panes for the UI.
 
@@ -259,14 +321,15 @@ def preview_pair(ffmpeg, frame_path, input_cs, output_cs,
     Returns {"left": <data-uri>, "right": <data-uri>, "info": <probe dict>},
     or {"error": "..."} when the frame cannot be processed.
     """
-    info = probe_frame(frame_path)
+    info = probe_frame(frame_path, probe_exe=probe_exe)
     if not info.get("supported", True):
         return {"error": info.get("note", "Unsupported frame format."),
                 "info": info}
 
     try:
         decode = []
-        if info.get("is_half"):
+        repair_half = bool(info.get("needs_half_lut"))
+        if repair_half:
             lut = ensure_half_lut(cache_dir)
             decode = ["format=gbrpf32le",
                       "lut1d=file='%s':interp=nearest" % _escape_for_filter(lut)]
@@ -276,7 +339,7 @@ def preview_pair(ffmpeg, frame_path, input_cs, output_cs,
 
         right_chain = list(decode)
         if TRANSFORMS.get((input_cs, output_cs)) == "matrix":
-            if not info.get("is_half"):
+            if not repair_half:
                 right_chain.append("format=gbrpf32le")
             right_chain.append(_mixer(AP1_TO_REC709))
             right_chain.append("zscale=tin=linear:min=gbr:pin=bt709:"

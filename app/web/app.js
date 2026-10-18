@@ -2613,7 +2613,30 @@ function updateFfmpegColorWarning() {
     ffmpegColorWarning.classList.remove("hidden");
     return;
   }
+  // A non-fatal note still gets shown, so a frame that could not be
+  // fully identified says so rather than quietly guessing.
+  if (color.note) {
+    ffmpegColorWarning.textContent = color.note;
+    ffmpegColorWarning.classList.remove("hidden");
+    return;
+  }
   ffmpegColorWarning.classList.add("hidden");
+}
+
+// A short, honest description of how the frames are being read. Worth
+// showing because half-float TIFF is handled differently depending on
+// what the installed ffmpeg does with it, and a silent wrong guess
+// there is exactly the kind of thing that is hard to spot later.
+function ffmpegColorReadNote(color) {
+  if (!color) return "";
+  if (color.kind === "exr") return "Reading EXR as linear float.";
+  if (color.is_half) {
+    return color.needs_half_lut
+      ? "16-bit float TIFF, corrected on read (this ffmpeg reads it as integer)."
+      : "16-bit float TIFF, read natively by ffmpeg.";
+  }
+  if (color.kind === "tiff") return `Reading ${color.bit_depth}-bit TIFF.`;
+  return "";
 }
 
 async function refreshFfmpegPreview() {
@@ -2660,7 +2683,9 @@ async function refreshFfmpegPreview() {
   right.src = result.right;
   ffmpegPreviewRight.appendChild(right);
 
-  ffmpegPreviewStatus.textContent = "Previewing " + result.frame;
+  const readNote = ffmpegColorReadNote(ffmpegSelected && ffmpegSelected.color);
+  ffmpegPreviewStatus.textContent =
+    "Previewing " + result.frame + (readNote ? " — " + readNote : "");
 }
 
 ffmpegColorEnable.addEventListener("change", async () => {
