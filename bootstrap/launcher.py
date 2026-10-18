@@ -301,9 +301,56 @@ def fetch_latest_app(cache_dir, branch="main", status_callback=None):
             return False
 
         target_app_dir = os.path.join(cache_dir, "app")
-        if os.path.isdir(target_app_dir):
-            shutil.rmtree(target_app_dir)
-        shutil.copytree(fetched_app_dir, target_app_dir)
+        staging_dir = target_app_dir + ".new"
+        backup_dir = target_app_dir + ".old"
+
+        # The swap is staged, never done in place.
+        #
+        # This used to be rmtree(target) followed by copytree(), which
+        # is not atomic: if the copy failed part way - a file locked by
+        # antivirus or pCloud is enough - the app folder was left
+        # half-new and half-missing. A new app.js beside an old
+        # index.html is a genuinely nasty state, because the page then
+        # loads script that expects elements the HTML does not have,
+        # and the resulting error takes out everything defined below
+        # it. The "using the last downloaded copy" message was a lie in
+        # that case too, since the old copy had already been deleted.
+        #
+        # So: build the new folder completely first, and only swap it
+        # in once it is whole. If anything goes wrong, the previous
+        # copy is put back.
+        for path in (staging_dir, backup_dir):
+            if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+
+        shutil.copytree(fetched_app_dir, staging_dir)
+
+        # Sanity check the staged copy before trusting it. These are
+        # the files that must agree with each other.
+        required = [
+            os.path.join(staging_dir, "main.py"),
+            os.path.join(staging_dir, "web", "index.html"),
+            os.path.join(staging_dir, "web", "app.js"),
+        ]
+        missing = [p for p in required if not os.path.isfile(p)]
+        if missing:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            report("Downloaded copy was incomplete, keeping the current one.")
+            return False
+
+        had_previous = os.path.isdir(target_app_dir)
+        if had_previous:
+            os.rename(target_app_dir, backup_dir)
+        try:
+            os.rename(staging_dir, target_app_dir)
+        except Exception:
+            # Put the old copy back rather than leaving nothing there.
+            if had_previous and not os.path.isdir(target_app_dir):
+                os.rename(backup_dir, target_app_dir)
+            raise
+
+        if os.path.isdir(backup_dir):
+            shutil.rmtree(backup_dir, ignore_errors=True)
 
         report("App code updated.")
         return True

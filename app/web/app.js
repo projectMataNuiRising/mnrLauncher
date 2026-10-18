@@ -2390,12 +2390,14 @@ async function initFfmpegScreen() {
   // Clear any preview left over from the last sequence, so a stale
   // frame is never shown next to a newly picked folder.
   ffmpegPreviewToken++;
+  if (ffmpegColorReady) {
   ffmpegPreviewLeft.innerHTML = "";
   ffmpegPreviewRight.innerHTML = "";
   ffmpegPreviewLeft.classList.remove("loading");
   ffmpegPreviewRight.classList.remove("loading");
   ffmpegPreviewStatus.textContent = "";
   ffmpegColorWarning.classList.add("hidden");
+  }
 
   const myGeneration = ++ffmpegTreeGeneration;
   ffmpegTreeRoot.innerHTML = "";
@@ -2486,20 +2488,11 @@ async function selectFfmpegFolder(pathParts, name) {
   }
   ffmpegDetectedInfo.textContent = text;
 
-  // Float frames are almost always ACEScg here, so pre-select that as
-  // the input. The artist can still change it; this just saves the
-  // common case a click.
-  if (info.color) {
-    await loadFfmpegColorOptions();
-    if (ffmpegColorLoaded && info.color.suggested_input) {
-      ffmpegColorInput.value = info.color.suggested_input;
-      updateFfmpegColorPairs();
-    }
-    updateFfmpegColorWarning();
-    if (ffmpegColorEnable.checked) {
-      refreshFfmpegPreview();
-    }
-  }
+  // The core of the tool is set up FIRST and on its own. Colour is an
+  // optional extra, so nothing in it is allowed to run before the
+  // output folder is filled in and the Render button is live -
+  // otherwise one failure in an optional feature takes the whole tool
+  // down with it.
 
   // Defaults to the sequence's own name with frame numbers and
   // periods already stripped off, still fully editable.
@@ -2513,6 +2506,29 @@ async function selectFfmpegFolder(pathParts, name) {
   updateFfmpegScalePreview();
   ffmpegConvertButton.disabled = false;
   ffmpegConvertButton.classList.add("ready");
+
+  // Float frames are almost always ACEScg here, so pre-select that as
+  // the input. The artist can still change it; this just saves the
+  // common case a click.
+  if (!info.color || !ffmpegColorReady) return;
+  try {
+    await loadFfmpegColorOptions();
+    if (ffmpegColorLoaded && info.color.suggested_input) {
+      ffmpegColorInput.value = info.color.suggested_input;
+      updateFfmpegColorPairs();
+    }
+    updateFfmpegColorWarning();
+    if (ffmpegColorEnable.checked) {
+      refreshFfmpegPreview();
+    }
+  } catch (e) {
+    // Say so rather than failing silently, but leave the render path
+    // alone - it is already set up and working above.
+    console.error("colour section failed", e);
+    ffmpegColorWarning.textContent =
+      "Colour options could not be set up: " + e;
+    ffmpegColorWarning.classList.remove("hidden");
+  }
 }
 
 // ---------------- Adjust Color Space ----------------
@@ -2531,13 +2547,21 @@ const ffmpegPreviewLeft = document.getElementById("ffmpeg-preview-left");
 const ffmpegPreviewRight = document.getElementById("ffmpeg-preview-right");
 const ffmpegPreviewStatus = document.getElementById("ffmpeg-preview-status");
 
+// True only when every control the colour section needs is present.
+// Each entry point checks this, so a missing element degrades to "no
+// colour section" rather than throwing into the caller.
+const ffmpegColorReady = !!(ffmpegColorEnable && ffmpegColorSection &&
+  ffmpegColorInput && ffmpegColorOutput && ffmpegColorNote &&
+  ffmpegColorWarning && ffmpegPreviewLeft && ffmpegPreviewRight &&
+  ffmpegPreviewStatus);
+
 let ffmpegColorSpaces = [];
 let ffmpegColorPairs = [];
 let ffmpegColorLoaded = false;
 let ffmpegPreviewToken = 0;
 
 async function loadFfmpegColorOptions() {
-  if (ffmpegColorLoaded) return;
+  if (!ffmpegColorReady || ffmpegColorLoaded) return;
   let result;
   try {
     result = await window.pywebview.api.get_colorspace_options();
@@ -2577,6 +2601,7 @@ function ffmpegPairAllowed(input, output) {
 // with the chosen input is disabled rather than silently failing at
 // render time.
 function updateFfmpegColorPairs() {
+  if (!ffmpegColorReady) return;
   const input = ffmpegColorInput.value;
   let firstAllowed = null;
   for (const opt of ffmpegColorOutput.options) {
@@ -2602,6 +2627,7 @@ function updateFfmpegColorPairs() {
 
 // Warns about frame formats before the artist commits to a render.
 function updateFfmpegColorWarning() {
+  if (!ffmpegColorReady) return;
   const color = ffmpegSelected && ffmpegSelected.color;
   if (!color) {
     ffmpegColorWarning.classList.add("hidden");
@@ -2640,7 +2666,7 @@ function ffmpegColorReadNote(color) {
 }
 
 async function refreshFfmpegPreview() {
-  if (!ffmpegColorEnable.checked || !ffmpegSelected) return;
+  if (!ffmpegColorReady || !ffmpegColorEnable.checked || !ffmpegSelected) return;
 
   const token = ++ffmpegPreviewToken;
   ffmpegPreviewLeft.innerHTML = "";
@@ -2688,27 +2714,38 @@ async function refreshFfmpegPreview() {
     "Previewing " + result.frame + (readNote ? " — " + readNote : "");
 }
 
-ffmpegColorEnable.addEventListener("change", async () => {
-  ffmpegColorSection.classList.toggle("hidden", !ffmpegColorEnable.checked);
-  if (!ffmpegColorEnable.checked) return;
-  await loadFfmpegColorOptions();
-  updateFfmpegColorPairs();
-  updateFfmpegColorWarning();
-  refreshFfmpegPreview();
-});
+// Guarded on purpose. These run while app.js is still loading, so if
+// any one of these elements were missing - a half-updated cache, an
+// index.html that did not come down with this app.js - an unguarded
+// addEventListener would throw here and every line BELOW this point
+// would never run, including the output folder path bar. An optional
+// feature must not be able to take the file down with it.
+if (ffmpegColorReady) {
+  ffmpegColorEnable.addEventListener("change", async () => {
+    ffmpegColorSection.classList.toggle("hidden", !ffmpegColorEnable.checked);
+    if (!ffmpegColorEnable.checked) return;
+    await loadFfmpegColorOptions();
+    updateFfmpegColorPairs();
+    updateFfmpegColorWarning();
+    refreshFfmpegPreview();
+  });
 
-ffmpegColorInput.addEventListener("change", () => {
-  updateFfmpegColorPairs();
-  refreshFfmpegPreview();
-});
+  ffmpegColorInput.addEventListener("change", () => {
+    updateFfmpegColorPairs();
+    refreshFfmpegPreview();
+  });
 
-ffmpegColorOutput.addEventListener("change", () => {
-  updateFfmpegColorPairs();
-  refreshFfmpegPreview();
-});
+  ffmpegColorOutput.addEventListener("change", () => {
+    updateFfmpegColorPairs();
+    refreshFfmpegPreview();
+  });
+} else {
+  console.error("Adjust Color Space controls are missing from the page; " +
+                "the rest of the Frames to MP4 tool is unaffected.");
+}
 
 function getFfmpegColorOptions() {
-  if (!ffmpegColorEnable.checked) return null;
+  if (!ffmpegColorReady || !ffmpegColorEnable.checked) return null;
   return {
     enabled: true,
     input: ffmpegColorInput.value,

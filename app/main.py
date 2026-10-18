@@ -2905,22 +2905,37 @@ class MnrApi:
         # Tells the UI what kind of frames these are, so it can suggest
         # a sensible input colour space and warn about formats ffmpeg
         # cannot process before the artist hits Render.
+        # Colour detection is a bonus on top of the inspection, never a
+        # requirement for it. If anything here goes wrong the sequence
+        # still gets reported so the artist can render normally, just
+        # without the colour section offering a suggestion.
         if HAS_COLORSPACE:
-            ff = _resolve_ffmpeg_paths()
-            info = colorspace.probe_frame(
-                first_file_path,
-                probe_exe=ff.get("probe_path") if ff else None)
-            result["color"] = {
-                "kind": info["kind"],
-                "bit_depth": info["bit_depth"],
-                "is_float": info["is_float"],
-                "is_half": info["is_half"],
-                "decoded_pix_fmt": info.get("decoded_pix_fmt"),
-                "needs_half_lut": info.get("needs_half_lut", False),
-                "supported": info["supported"],
-                "note": info["note"],
-                "suggested_input": "acescg" if info["is_float"] else "srgb",
-            }
+            try:
+                ff = _resolve_ffmpeg_paths()
+                info = colorspace.probe_frame(
+                    first_file_path,
+                    probe_exe=ff.get("probe_path") if ff else None)
+                result["color"] = {
+                    "kind": info["kind"],
+                    "bit_depth": info["bit_depth"],
+                    "is_float": info["is_float"],
+                    "is_half": info["is_half"],
+                    "decoded_pix_fmt": info.get("decoded_pix_fmt"),
+                    "needs_half_lut": info.get("needs_half_lut", False),
+                    "supported": info["supported"],
+                    "note": info["note"],
+                    "suggested_input": "acescg" if info["is_float"] else "srgb",
+                }
+            except Exception as e:
+                print(f"[mnr] colour probe failed on {first_file_path}: {e}")
+                result["color"] = {
+                    "kind": "unknown", "bit_depth": None,
+                    "is_float": False, "is_half": False,
+                    "decoded_pix_fmt": None, "needs_half_lut": False,
+                    "supported": True,
+                    "note": f"Could not identify this frame format ({e}).",
+                    "suggested_input": "srgb",
+                }
 
         return result
 

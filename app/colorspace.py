@@ -54,8 +54,10 @@ def _tiff_tags(path):
                 return None
             e = "<" if bo == b"II" else ">"
             magic, = struct.unpack(e + "H", fh.read(2))
+            if magic == 43:
+                return "bigtiff"                 # handled by the caller
             if magic != 42:
-                return None                      # BigTIFF or not a TIFF
+                return None                      # not a TIFF at all
             offset, = struct.unpack(e + "I", fh.read(4))
             fh.seek(offset)
             count, = struct.unpack(e + "H", fh.read(2))
@@ -151,6 +153,19 @@ def probe_frame(path, probe_exe=None):
 
     out["kind"] = "tiff"
     tags = _tiff_tags(path)
+
+    if tags == "bigtiff":
+        # A BigTIFF's sample format cannot be read by the small parser
+        # above, so there is no way to tell half-float from integer.
+        # Decide on what the decoder actually produces instead.
+        fmt = decoded_pix_fmt(probe_exe, path)
+        out["decoded_pix_fmt"] = fmt
+        out["bit_depth"] = None
+        out["note"] = ("BigTIFF: the frame type could not be read from the "
+                       "header, so no correction was applied. "
+                       "Check the preview.")
+        return out
+
     if not tags:
         out["note"] = "Could not read the TIFF header."
         return out
@@ -184,8 +199,18 @@ def probe_frame(path, probe_exe=None):
             out["note"] = ("Could not confirm how ffmpeg reads this "
                            "16-bit float TIFF (ffprobe not found), so no "
                            "correction was applied. Check the preview.")
+        elif fmt in ("unknown", "none", "") or _is_float_pix_fmt(fmt):
+            # "unknown" means ffmpeg has no decoder path for this TIFF
+            # variant (planar half-float is one). Applying the repair
+            # LUT to something that will not decode helps nobody.
+            out["needs_half_lut"] = False
+            if fmt in ("unknown", "none", ""):
+                out["supported"] = False
+                out["note"] = ("ffmpeg cannot decode this TIFF variant. "
+                               "Render EXR, or a non-planar 16-bit TIFF, "
+                               "instead.")
         else:
-            out["needs_half_lut"] = not _is_float_pix_fmt(fmt)
+            out["needs_half_lut"] = True
 
     return out
 
