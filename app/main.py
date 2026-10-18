@@ -43,6 +43,26 @@ try:
 except ImportError:
     HAS_PSUTIL = False
 
+# colorspace.py sits next to this file. The bootstrap runs us through
+# runpy.run_path, which does NOT put our own folder on sys.path, so a
+# plain "import colorspace" would fail in the compiled build even
+# though the file is right there. Add the folder ourselves first.
+#
+# Wrapped so that a missing or broken colorspace.py only costs the
+# colour-space section of the Frames to MP4 tool, rather than stopping
+# the whole launcher from starting.
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+if _APP_DIR not in sys.path:
+    sys.path.insert(0, _APP_DIR)
+
+try:
+    import colorspace
+    HAS_COLORSPACE = True
+except Exception as _colorspace_error:
+    colorspace = None
+    HAS_COLORSPACE = False
+    print(f"[mnr] colour-space support unavailable: {_colorspace_error}")
+
 APP_NAME = "MNR Launcher"
 APP_VERSION = "0.1.0-stage1"
 
@@ -364,6 +384,22 @@ def _extract_rawtherapee_version(rt_version_dir):
     return match.group(1) if match else "?"
 
 
+# Keeps ffmpeg/ffprobe from flashing a console window on Windows every
+# time the preview refreshes. Zero on every other platform.
+_CREATE_NO_WINDOW = 0x08000000 if platform.system() == "Windows" else 0
+
+
+def _colorspace_cache_dir():
+    """
+    Where the generated half-float decoding LUT lives. Kept in the same
+    per-machine folder as the rest of the launcher's local state, so it
+    survives app updates and never touches pCloud.
+    """
+    path = os.path.join(get_local_state_dir(), "colorspace")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
 def _resolve_ffmpeg_paths():
     root = get_pcloud_root()
     ff_root = os.path.join(root, "02-pipeline", "apps", "ffmpeg", "01-latest")
@@ -380,11 +416,42 @@ def _resolve_ffmpeg_paths():
     # but check the root too in case someone flattens it.
     for candidate in (os.path.join(ff_version_dir, "bin", "ffmpeg.exe"), os.path.join(ff_version_dir, "ffmpeg.exe")):
         if os.path.isfile(candidate):
+            # ffprobe ships alongside ffmpeg in every standard build. It
+            # is how EXR frames get their resolution read, since PIL
+            # cannot open EXR at all.
+            probe = os.path.join(os.path.dirname(candidate), "ffprobe.exe")
             return {
                 "pipeline_build_dir": pipeline_build_dir,
                 "ffmpeg_version_dir": ff_version_dir,
                 "exe_path": candidate,
+                "probe_path": probe if os.path.isfile(probe) else None,
             }
+    return None
+
+
+def _probe_resolution(probe_exe, frame_path):
+    """
+    Read a frame's pixel size with ffprobe. Used for formats PIL cannot
+    open (EXR above all). Returns (width, height) or None.
+    """
+    if not probe_exe or not os.path.isfile(probe_exe):
+        return None
+    try:
+        result = subprocess.run(
+            [probe_exe, "-v", "error",
+             "-select_streams", "v:0",
+             "-show_entries", "stream=width,height",
+             "-of", "csv=p=0:s=x", frame_path],
+            capture_output=True, text=True, timeout=30,
+            creationflags=_CREATE_NO_WINDOW,
+        )
+        if result.returncode != 0:
+            return None
+        parts = result.stdout.strip().split("x")
+        if len(parts) >= 2:
+            return int(parts[0]), int(parts[1])
+    except Exception:
+        return None
     return None
 
 
@@ -1217,9 +1284,54 @@ _FFMPEG_PROGRESS = {
 _FFMPEG_FRAME_LOG_RE = re.compile(r"frame=\s*(\d+)")
 
 
-def _run_ffmpeg_worker(exe_path, folder_path, seq, framerate, bitrate_kbps, scale_percent, output_path):
-    input_pattern = os.path.join(folder_path, f"{seq['prefix']}.%0{seq['padding']}d.{seq['ext']}")
+def _build_ffmpeg_video_filters(folder_path, seq, scale_percent, color_opts):
+    """
+    Work out the -vf chain and any extra output flags.
+
+    Without colour options this is exactly what it always was: a single
+    scale filter. With them, colorspace.py builds the conversion and
+    the scale is folded in as the last step before pixel packing, so
+    the colour maths happens at full precision and the resize happens
+    after it.
+
+    Returns (filters, extra_output_flags, error_message).
+    """
     scale_factor = scale_percent / 100.0
+    scale_filter = f"scale=iw*{scale_factor}:ih*{scale_factor}"
+
+    if not (color_opts and color_opts.get("enabled")):
+        return scale_filter, [], None
+
+    if not HAS_COLORSPACE:
+        return None, None, "Colour-space support is not available in this build."
+
+    first_frame = os.path.join(folder_path, seq["first_file"])
+    info = colorspace.probe_frame(first_frame)
+    try:
+        filters, flags = colorspace.build_filters(
+            color_opts.get("input", "srgb"),
+            color_opts.get("output", "srgb"),
+            info,
+            extra=[scale_filter],
+            cache_dir=_colorspace_cache_dir(),
+        )
+    except ValueError as e:
+        return None, None, str(e)
+    return filters, flags, None
+
+
+def _run_ffmpeg_worker(exe_path, folder_path, seq, framerate, bitrate_kbps,
+                       scale_percent, output_path, color_opts=None):
+    input_pattern = os.path.join(folder_path, f"{seq['prefix']}.%0{seq['padding']}d.{seq['ext']}")
+
+    filters, extra_flags, error = _build_ffmpeg_video_filters(
+        folder_path, seq, scale_percent, color_opts)
+    if error:
+        _FFMPEG_PROGRESS["ok"] = False
+        _FFMPEG_PROGRESS["detail"] = error
+        _FFMPEG_PROGRESS["active"] = False
+        _FFMPEG_PROGRESS["done"] = True
+        return
 
     cmd = [
         exe_path,
@@ -1227,12 +1339,11 @@ def _run_ffmpeg_worker(exe_path, folder_path, seq, framerate, bitrate_kbps, scal
         "-start_number", str(seq["start_frame"]),
         "-framerate", str(framerate),
         "-i", input_pattern,
-        "-vf", f"scale=iw*{scale_factor}:ih*{scale_factor}",
+        "-vf", filters,
         "-c:v", "libx264",
         "-b:v", f"{bitrate_kbps}k",
         "-pix_fmt", "yuv420p",
-        output_path,
-    ]
+    ] + list(extra_flags) + [output_path]
 
     _FFMPEG_PROGRESS["total_frames"] = seq["frame_count"]
 
@@ -2755,14 +2866,29 @@ class MnrApi:
             return {"ok": False, "detail": "No numbered image sequence found in this folder"}
 
         first_file_path = os.path.join(folder_path, seq["first_file"])
+
+        # PIL handles jpg/png/tiff. It cannot open EXR at all, and it
+        # misreads some float TIFFs, so ffprobe is the fallback.
+        width = height = None
         try:
             from PIL import Image
             with Image.open(first_file_path) as img:
                 width, height = img.size
-        except Exception as e:
-            return {"ok": False, "detail": f"Could not read frame resolution: {e}"}
+        except Exception:
+            pass
 
-        return {
+        if not width or not height:
+            paths = _resolve_ffmpeg_paths()
+            size = _probe_resolution(paths.get("probe_path") if paths else None,
+                                     first_file_path)
+            if size:
+                width, height = size
+
+        if not width or not height:
+            return {"ok": False,
+                    "detail": "Could not read the frame resolution from this sequence."}
+
+        result = {
             "ok": True,
             "prefix": seq["prefix"],
             "frame_count": seq["frame_count"],
@@ -2773,7 +2899,75 @@ class MnrApi:
             "height": height,
         }
 
-    def run_ffmpeg_convert(self, relative_parts, framerate, bitrate_kbps, scale_percent, output_name, output_folder_parts=None, from_root=False):
+        # Tells the UI what kind of frames these are, so it can suggest
+        # a sensible input colour space and warn about formats ffmpeg
+        # cannot process before the artist hits Render.
+        if HAS_COLORSPACE:
+            info = colorspace.probe_frame(first_file_path)
+            result["color"] = {
+                "kind": info["kind"],
+                "bit_depth": info["bit_depth"],
+                "is_float": info["is_float"],
+                "is_half": info["is_half"],
+                "supported": info["supported"],
+                "note": info["note"],
+                "suggested_input": "acescg" if info["is_float"] else "srgb",
+            }
+
+        return result
+
+    def get_colorspace_options(self):
+        """
+        The input/output choices the Adjust Color Space section offers.
+        Deliberately short: this studio is ACES 1.3 but only ever needs
+        these two working spaces, and every allowed pair is listed so
+        the UI can grey out combinations that make no sense.
+        """
+        if not HAS_COLORSPACE:
+            return {"ok": False, "detail": "Colour-space support is not available in this build."}
+        return {
+            "ok": True,
+            "spaces": colorspace.COLORSPACES,
+            "pairs": [{"input": a, "output": b}
+                      for (a, b) in colorspace.TRANSFORMS.keys()],
+        }
+
+    def get_colorspace_preview(self, relative_parts, input_cs, output_cs,
+                               width=420, from_root=False):
+        """
+        Renders the two preview panes for the first frame of a sequence:
+        the frame as it is now, and the frame as it will be exported.
+
+        Both come straight out of the same ffmpeg filters the render
+        uses, so what the artist sees here is what they will get.
+        """
+        if not HAS_COLORSPACE:
+            return {"ok": False, "detail": "Colour-space support is not available in this build."}
+
+        paths = _resolve_ffmpeg_paths()
+        if not paths:
+            return {"ok": False, "detail": "Could not find ffmpeg in the pipeline folder"}
+
+        folder_path = _resolve_pcloud_path(relative_parts, from_root)
+        seq = _detect_frame_sequence(folder_path)
+        if not seq:
+            return {"ok": False, "detail": "No numbered image sequence found in this folder"}
+
+        frame_path = os.path.join(folder_path, seq["first_file"])
+        result = colorspace.preview_pair(
+            paths["exe_path"], frame_path, input_cs, output_cs,
+            width=width, cache_dir=_colorspace_cache_dir())
+
+        if "error" in result:
+            return {"ok": False, "detail": result["error"]}
+        return {
+            "ok": True,
+            "left": result["left"],
+            "right": result["right"],
+            "frame": seq["first_file"],
+        }
+
+    def run_ffmpeg_convert(self, relative_parts, framerate, bitrate_kbps, scale_percent, output_name, output_folder_parts=None, from_root=False, color_opts=None):
         if _FFMPEG_PROGRESS["active"]:
             return {"ok": False, "detail": "A previous conversion is still in progress"}
 
@@ -2799,6 +2993,14 @@ class MnrApi:
         if os.path.exists(output_path):
             return {"ok": False, "detail": "A file with that output name already exists"}
 
+        # Fail here, with a message the artist can act on, rather than
+        # letting ffmpeg die halfway through a long sequence.
+        if color_opts and color_opts.get("enabled"):
+            _, _, color_error = _build_ffmpeg_video_filters(
+                folder_path, seq, scale_percent, color_opts)
+            if color_error:
+                return {"ok": False, "detail": color_error}
+
         _FFMPEG_PROGRESS["active"] = True
         _FFMPEG_PROGRESS["done"] = False
         _FFMPEG_PROGRESS["ok"] = False
@@ -2807,7 +3009,8 @@ class MnrApi:
 
         thread = threading.Thread(
             target=_run_ffmpeg_worker,
-            args=(paths["exe_path"], folder_path, seq, framerate, bitrate_kbps, scale_percent, output_path),
+            args=(paths["exe_path"], folder_path, seq, framerate, bitrate_kbps,
+                  scale_percent, output_path, color_opts),
             daemon=True,
         )
         thread.start()

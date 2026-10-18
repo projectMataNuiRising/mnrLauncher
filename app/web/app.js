@@ -2387,6 +2387,16 @@ async function initFfmpegScreen() {
   ffmpegOutputName.value = "";
   ffmpegConvertButton.disabled = true;
 
+  // Clear any preview left over from the last sequence, so a stale
+  // frame is never shown next to a newly picked folder.
+  ffmpegPreviewToken++;
+  ffmpegPreviewLeft.innerHTML = "";
+  ffmpegPreviewRight.innerHTML = "";
+  ffmpegPreviewLeft.classList.remove("loading");
+  ffmpegPreviewRight.classList.remove("loading");
+  ffmpegPreviewStatus.textContent = "";
+  ffmpegColorWarning.classList.add("hidden");
+
   const myGeneration = ++ffmpegTreeGeneration;
   ffmpegTreeRoot.innerHTML = "";
   await buildFfmpegLevel(ffmpegTreeRoot, [], myGeneration);
@@ -2467,6 +2477,7 @@ async function selectFfmpegFolder(pathParts, name) {
     width: info.width,
     height: info.height,
     frameCount: info.frame_count,
+    color: info.color || null,
   };
 
   let text = `${info.frame_count} frames (${info.start_frame}-${info.end_frame}), ${info.width}x${info.height}`;
@@ -2474,6 +2485,21 @@ async function selectFfmpegFolder(pathParts, name) {
     text += " \u2014 warning: gaps detected in the frame numbers";
   }
   ffmpegDetectedInfo.textContent = text;
+
+  // Float frames are almost always ACEScg here, so pre-select that as
+  // the input. The artist can still change it; this just saves the
+  // common case a click.
+  if (info.color) {
+    await loadFfmpegColorOptions();
+    if (ffmpegColorLoaded && info.color.suggested_input) {
+      ffmpegColorInput.value = info.color.suggested_input;
+      updateFfmpegColorPairs();
+    }
+    updateFfmpegColorWarning();
+    if (ffmpegColorEnable.checked) {
+      refreshFfmpegPreview();
+    }
+  }
 
   // Defaults to the sequence's own name with frame numbers and
   // periods already stripped off, still fully editable.
@@ -2487,6 +2513,182 @@ async function selectFfmpegFolder(pathParts, name) {
   updateFfmpegScalePreview();
   ffmpegConvertButton.disabled = false;
   ffmpegConvertButton.classList.add("ready");
+}
+
+// ---------------- Adjust Color Space ----------------
+// Off by default. Ticking the checkbox reveals an input/output pair
+// and two live preview panes showing the same frame untransformed and
+// as it will be exported, both rendered with the same ffmpeg filters
+// the render uses.
+
+const ffmpegColorEnable = document.getElementById("ffmpeg-color-enable");
+const ffmpegColorSection = document.getElementById("ffmpeg-color-section");
+const ffmpegColorInput = document.getElementById("ffmpeg-color-input");
+const ffmpegColorOutput = document.getElementById("ffmpeg-color-output");
+const ffmpegColorNote = document.getElementById("ffmpeg-color-note");
+const ffmpegColorWarning = document.getElementById("ffmpeg-color-warning");
+const ffmpegPreviewLeft = document.getElementById("ffmpeg-preview-left");
+const ffmpegPreviewRight = document.getElementById("ffmpeg-preview-right");
+const ffmpegPreviewStatus = document.getElementById("ffmpeg-preview-status");
+
+let ffmpegColorSpaces = [];
+let ffmpegColorPairs = [];
+let ffmpegColorLoaded = false;
+let ffmpegPreviewToken = 0;
+
+async function loadFfmpegColorOptions() {
+  if (ffmpegColorLoaded) return;
+  let result;
+  try {
+    result = await window.pywebview.api.get_colorspace_options();
+  } catch (e) {
+    result = { ok: false, detail: String(e) };
+  }
+  if (!result || !result.ok) {
+    // No colour support in this build. Hide the checkbox rather than
+    // offering something that cannot work.
+    ffmpegColorEnable.closest(".checkbox-row").classList.add("hidden");
+    return;
+  }
+
+  ffmpegColorSpaces = result.spaces || [];
+  ffmpegColorPairs = result.pairs || [];
+
+  for (const select of [ffmpegColorInput, ffmpegColorOutput]) {
+    select.innerHTML = "";
+    for (const space of ffmpegColorSpaces) {
+      const opt = document.createElement("option");
+      opt.value = space.id;
+      opt.textContent = space.label;
+      opt.title = space.detail || "";
+      select.appendChild(opt);
+    }
+  }
+  ffmpegColorInput.value = "acescg";
+  ffmpegColorOutput.value = "srgb";
+  ffmpegColorLoaded = true;
+}
+
+function ffmpegPairAllowed(input, output) {
+  return ffmpegColorPairs.some((p) => p.input === input && p.output === output);
+}
+
+// Keeps the output list honest: anything that isn't a supported pair
+// with the chosen input is disabled rather than silently failing at
+// render time.
+function updateFfmpegColorPairs() {
+  const input = ffmpegColorInput.value;
+  let firstAllowed = null;
+  for (const opt of ffmpegColorOutput.options) {
+    const allowed = ffmpegPairAllowed(input, opt.value);
+    opt.disabled = !allowed;
+    if (allowed && firstAllowed === null) firstAllowed = opt.value;
+  }
+  if (!ffmpegPairAllowed(input, ffmpegColorOutput.value) && firstAllowed) {
+    ffmpegColorOutput.value = firstAllowed;
+  }
+
+  const input2 = ffmpegColorInput.value;
+  const output = ffmpegColorOutput.value;
+  if (input2 === output) {
+    ffmpegColorNote.textContent =
+      "No conversion — values are passed through untouched.";
+  } else {
+    ffmpegColorNote.textContent =
+      "Converts " + input2.toUpperCase() + " to " + output.toUpperCase() +
+      " using a straight matrix and transfer curve (no tone map).";
+  }
+}
+
+// Warns about frame formats before the artist commits to a render.
+function updateFfmpegColorWarning() {
+  const color = ffmpegSelected && ffmpegSelected.color;
+  if (!color) {
+    ffmpegColorWarning.classList.add("hidden");
+    return;
+  }
+  if (color.supported === false) {
+    ffmpegColorWarning.textContent = color.note ||
+      "This frame format cannot be processed.";
+    ffmpegColorWarning.classList.remove("hidden");
+    return;
+  }
+  ffmpegColorWarning.classList.add("hidden");
+}
+
+async function refreshFfmpegPreview() {
+  if (!ffmpegColorEnable.checked || !ffmpegSelected) return;
+
+  const token = ++ffmpegPreviewToken;
+  ffmpegPreviewLeft.innerHTML = "";
+  ffmpegPreviewRight.innerHTML = "";
+  ffmpegPreviewLeft.classList.add("loading");
+  ffmpegPreviewRight.classList.add("loading");
+  ffmpegPreviewStatus.textContent = "Rendering preview...";
+
+  let result;
+  try {
+    result = await window.pywebview.api.get_colorspace_preview(
+      ffmpegSelected.pathParts,
+      ffmpegColorInput.value,
+      ffmpegColorOutput.value,
+      420,
+      true
+    );
+  } catch (e) {
+    result = { ok: false, detail: String(e) };
+  }
+
+  // A newer request started while this one was running, so its result
+  // is stale and must not overwrite the newer panes.
+  if (token !== ffmpegPreviewToken) return;
+
+  ffmpegPreviewLeft.classList.remove("loading");
+  ffmpegPreviewRight.classList.remove("loading");
+
+  if (!result || !result.ok) {
+    ffmpegPreviewStatus.textContent =
+      (result && result.detail) || "Could not render the preview.";
+    return;
+  }
+
+  const left = document.createElement("img");
+  left.src = result.left;
+  ffmpegPreviewLeft.appendChild(left);
+
+  const right = document.createElement("img");
+  right.src = result.right;
+  ffmpegPreviewRight.appendChild(right);
+
+  ffmpegPreviewStatus.textContent = "Previewing " + result.frame;
+}
+
+ffmpegColorEnable.addEventListener("change", async () => {
+  ffmpegColorSection.classList.toggle("hidden", !ffmpegColorEnable.checked);
+  if (!ffmpegColorEnable.checked) return;
+  await loadFfmpegColorOptions();
+  updateFfmpegColorPairs();
+  updateFfmpegColorWarning();
+  refreshFfmpegPreview();
+});
+
+ffmpegColorInput.addEventListener("change", () => {
+  updateFfmpegColorPairs();
+  refreshFfmpegPreview();
+});
+
+ffmpegColorOutput.addEventListener("change", () => {
+  updateFfmpegColorPairs();
+  refreshFfmpegPreview();
+});
+
+function getFfmpegColorOptions() {
+  if (!ffmpegColorEnable.checked) return null;
+  return {
+    enabled: true,
+    input: ffmpegColorInput.value,
+    output: ffmpegColorOutput.value,
+  };
 }
 
 function getFfmpegFramerate() {
@@ -2550,7 +2752,8 @@ ffmpegConvertButton.addEventListener("click", async () => {
   const openWhenDone = document.getElementById("ffmpeg-open-when-done").checked;
 
   const startResult = await window.pywebview.api.run_ffmpeg_convert(
-    ffmpegSelected.pathParts, framerate, bitrate, scale, outputName, outputFolder, true
+    ffmpegSelected.pathParts, framerate, bitrate, scale, outputName, outputFolder, true,
+    getFfmpegColorOptions()
   );
 
   if (!startResult.ok) {

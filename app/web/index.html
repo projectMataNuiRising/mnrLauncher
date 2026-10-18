@@ -591,6 +591,40 @@
           <input type="number" id="ffmpeg-bitrate" class="field-select" value="8000" min="500">
         </div>
 
+        <label class="checkbox-row">
+          <input type="checkbox" id="ffmpeg-color-enable">
+          Adjust Color Space
+        </label>
+
+        <div id="ffmpeg-color-section" class="color-section hidden">
+          <div class="color-row">
+            <div class="color-field">
+              <label class="field-label">Input</label>
+              <select id="ffmpeg-color-input" class="field-select"></select>
+            </div>
+            <div class="color-arrow">&rarr;</div>
+            <div class="color-field">
+              <label class="field-label">Output</label>
+              <select id="ffmpeg-color-output" class="field-select"></select>
+            </div>
+          </div>
+
+          <div id="ffmpeg-color-note" class="next-note"></div>
+          <div id="ffmpeg-color-warning" class="color-warning hidden"></div>
+
+          <div class="color-preview-row">
+            <div class="color-preview">
+              <div class="color-preview-label">Source</div>
+              <div class="color-preview-frame" id="ffmpeg-preview-left"></div>
+            </div>
+            <div class="color-preview">
+              <div class="color-preview-label color-preview-label-out">Export</div>
+              <div class="color-preview-frame" id="ffmpeg-preview-right"></div>
+            </div>
+          </div>
+          <div id="ffmpeg-preview-status" class="next-note"></div>
+        </div>
+
         <div class="field-group">
           <label class="field-label">Output folder</label>
           <div class="path-bar">
