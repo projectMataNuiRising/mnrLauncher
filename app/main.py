@@ -624,10 +624,17 @@ _AE_PLUGIN_RAW_BASE = "https://raw.githubusercontent.com/projectMataNuiRising/mn
 _AE_PLUGIN_FILENAME = "MNR_Launcher_Panel.jsx"
 _AE_PLUGIN_SOURCE = f"{_AE_PLUGIN_RAW_BASE}/src/{_AE_PLUGIN_FILENAME}"
 _AE_PLUGIN_MANIFEST = f"{_AE_PLUGIN_RAW_BASE}/build/plugin.json"
-# Runs every time After Effects starts: opens the Scene Manager in place of
-# the Home screen. Lives in Scripts\Startup next to the ScriptUI Panels folder.
-_AE_STARTUP_FILENAME = "MNR_Scene_Manager_Startup.jsx"
-_AE_STARTUP_SOURCE = f"{_AE_PLUGIN_RAW_BASE}/src/{_AE_STARTUP_FILENAME}"
+# Run every time After Effects starts, from Scripts\Startup next to the
+# ScriptUI Panels folder: the Scene Manager (opens in place of the Home
+# screen) and the MNR project settings (timecode, OCIO ACES, 32 bpc).
+_AE_STARTUP_FILENAMES = (
+    "MNR_Scene_Manager_Startup.jsx",
+    "MNR_Project_Settings_Startup.jsx",
+)
+
+
+def _ae_startup_source(filename):
+    return f"{_AE_PLUGIN_RAW_BASE}/src/{filename}"
 
 
 def _ae_user_scripts_root():
@@ -1051,22 +1058,22 @@ def install_ae_plugin_elevated(install_dir):
     target_folder = _ae_system_scriptui_folder(install_dir)
     target_path = os.path.join(target_folder, _AE_PLUGIN_FILENAME)
 
-    # The startup script (opens the Scene Manager at launch) goes in the
-    # same elevated step, so it is still one Windows prompt. A plugin
-    # version without it simply installs without it.
-    startup_temp = None
+    # The startup scripts (Scene Manager at launch, project settings) go
+    # in the same elevated step, so it is still one Windows prompt. A
+    # plugin version without one simply installs without it.
     startup_folder = _ae_system_startup_folder(install_dir)
-    startup_path = os.path.join(startup_folder, _AE_STARTUP_FILENAME)
-    try:
-        with _url_open(_AE_STARTUP_SOURCE, timeout=20) as resp:
-            startup_source = resp.read()
-        if startup_source.strip():
-            startup_temp = os.path.join(tempfile.gettempdir(), _AE_STARTUP_FILENAME)
-            with open(startup_temp, "wb") as f:
-                f.write(startup_source)
-    except Exception as e:
-        _log(f"install_ae_plugin_elevated: no startup script ({e})")
-        startup_temp = None
+    startup_copies = []          # (temp file, installed path)
+    for name in _AE_STARTUP_FILENAMES:
+        try:
+            with _url_open(_ae_startup_source(name), timeout=20) as resp:
+                startup_source = resp.read()
+            if startup_source.strip():
+                startup_temp = os.path.join(tempfile.gettempdir(), name)
+                with open(startup_temp, "wb") as f:
+                    f.write(startup_source)
+                startup_copies.append((startup_temp, os.path.join(startup_folder, name)))
+        except Exception as e:
+            _log(f"install_ae_plugin_elevated: no startup script {name} ({e})")
 
     # .NET methods rather than New-Item/Copy-Item: cmdlet parameters
     # differ between PowerShell versions (New-Item has no -LiteralPath
@@ -1076,11 +1083,10 @@ def install_ae_plugin_elevated(install_dir):
         f"[System.IO.Directory]::CreateDirectory({_ps_quote(target_folder)}) | Out-Null\n"
         f"[System.IO.File]::Copy({_ps_quote(temp_path)}, {_ps_quote(target_path)}, $true)\n"
     )
-    if startup_temp:
-        body += (
-            f"[System.IO.Directory]::CreateDirectory({_ps_quote(startup_folder)}) | Out-Null\n"
-            f"[System.IO.File]::Copy({_ps_quote(startup_temp)}, {_ps_quote(startup_path)}, $true)\n"
-        )
+    if startup_copies:
+        body += f"[System.IO.Directory]::CreateDirectory({_ps_quote(startup_folder)}) | Out-Null\n"
+        for startup_temp, startup_path in startup_copies:
+            body += f"[System.IO.File]::Copy({_ps_quote(startup_temp)}, {_ps_quote(startup_path)}, $true)\n"
 
     ok, detail = _run_elevated_script(body)
     if not ok:
@@ -1089,16 +1095,18 @@ def install_ae_plugin_elevated(install_dir):
     if not os.path.isfile(target_path):
         return {"ok": False, "detail": "The elevated step finished but the plugin is not there"}
 
+    installed = [p for _t, p in startup_copies if os.path.isfile(p)]
     _log(f"install_ae_plugin_elevated: {target_path}" +
-         (f" + {startup_path}" if startup_temp and os.path.isfile(startup_path) else ""))
+         "".join(f" + {p}" for p in installed))
     return {"ok": True, "path": target_path, "plugin_version": _fetch_plugin_version()}
 
 
 def uninstall_ae_plugin_elevated(install_dir):
     """Removes the panel and its startup script from the After Effects folder, with a UAC prompt."""
     target_path = os.path.join(_ae_system_scriptui_folder(install_dir), _AE_PLUGIN_FILENAME)
-    startup_path = os.path.join(_ae_system_startup_folder(install_dir), _AE_STARTUP_FILENAME)
-    present = [p for p in (target_path, startup_path) if os.path.isfile(p)]
+    startup_folder = _ae_system_startup_folder(install_dir)
+    startup_paths = [os.path.join(startup_folder, n) for n in _AE_STARTUP_FILENAMES]
+    present = [p for p in [target_path] + startup_paths if os.path.isfile(p)]
     if not present:
         return {"ok": True, "detail": "Plugin was not installed there"}
 
