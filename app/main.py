@@ -666,11 +666,13 @@ def _ae_scriptui_folder(version):
 
 
 # After Effects preferences switched off before every launch from the
-# launcher. "Show Welcome Screen" is the Home screen (Preferences >
-# Startup & Repair > Enable Home Screen); found in the prefs file, Adobe
-# does not document it.
+# launcher, so only the MNR Scene Manager opens. "Show Welcome Screen" is
+# the Home screen (Preferences > Startup & Repair > Enable Home Screen),
+# "Show Tip of the Day" the tip popup next to it. Found in the prefs file,
+# Adobe does not document them.
 _AE_PREFS_OFF = (
     ("General Section", "Show Welcome Screen"),
+    ("General Section", "Show Tip of the Day"),
 )
 
 
