@@ -624,6 +624,10 @@ _AE_PLUGIN_RAW_BASE = "https://raw.githubusercontent.com/projectMataNuiRising/mn
 _AE_PLUGIN_FILENAME = "MNR_Launcher_Panel.jsx"
 _AE_PLUGIN_SOURCE = f"{_AE_PLUGIN_RAW_BASE}/src/{_AE_PLUGIN_FILENAME}"
 _AE_PLUGIN_MANIFEST = f"{_AE_PLUGIN_RAW_BASE}/build/plugin.json"
+# Runs every time After Effects starts: opens the Scene Manager in place of
+# the Home screen. Lives in Scripts\Startup next to the ScriptUI Panels folder.
+_AE_STARTUP_FILENAME = "MNR_Scene_Manager_Startup.jsx"
+_AE_STARTUP_SOURCE = f"{_AE_PLUGIN_RAW_BASE}/src/{_AE_STARTUP_FILENAME}"
 
 
 def _ae_user_scripts_root():
@@ -671,6 +675,11 @@ def _ae_system_scriptui_folder(install_dir):
     it is only a fallback for when the per-user folder does not work.
     """
     return os.path.join(install_dir, "Support Files", "Scripts", "ScriptUI Panels")
+
+
+def _ae_system_startup_folder(install_dir):
+    """Scripts After Effects runs every time it starts, inside the install."""
+    return os.path.join(install_dir, "Support Files", "Scripts", "Startup")
 
 
 _PLUGIN_VERSION_RE = re.compile(r'PLUGIN_VERSION\s*=\s*["\']([^"\']+)["\']')
@@ -951,6 +960,23 @@ def install_ae_plugin_elevated(install_dir):
     target_folder = _ae_system_scriptui_folder(install_dir)
     target_path = os.path.join(target_folder, _AE_PLUGIN_FILENAME)
 
+    # The startup script (opens the Scene Manager at launch) goes in the
+    # same elevated step, so it is still one Windows prompt. A plugin
+    # version without it simply installs without it.
+    startup_temp = None
+    startup_folder = _ae_system_startup_folder(install_dir)
+    startup_path = os.path.join(startup_folder, _AE_STARTUP_FILENAME)
+    try:
+        with _url_open(_AE_STARTUP_SOURCE, timeout=20) as resp:
+            startup_source = resp.read()
+        if startup_source.strip():
+            startup_temp = os.path.join(tempfile.gettempdir(), _AE_STARTUP_FILENAME)
+            with open(startup_temp, "wb") as f:
+                f.write(startup_source)
+    except Exception as e:
+        _log(f"install_ae_plugin_elevated: no startup script ({e})")
+        startup_temp = None
+
     # .NET methods rather than New-Item/Copy-Item: cmdlet parameters
     # differ between PowerShell versions (New-Item has no -LiteralPath
     # in Windows PowerShell 5.1, for instance), while these calls behave
@@ -959,6 +985,11 @@ def install_ae_plugin_elevated(install_dir):
         f"[System.IO.Directory]::CreateDirectory({_ps_quote(target_folder)}) | Out-Null\n"
         f"[System.IO.File]::Copy({_ps_quote(temp_path)}, {_ps_quote(target_path)}, $true)\n"
     )
+    if startup_temp:
+        body += (
+            f"[System.IO.Directory]::CreateDirectory({_ps_quote(startup_folder)}) | Out-Null\n"
+            f"[System.IO.File]::Copy({_ps_quote(startup_temp)}, {_ps_quote(startup_path)}, $true)\n"
+        )
 
     ok, detail = _run_elevated_script(body)
     if not ok:
@@ -967,23 +998,26 @@ def install_ae_plugin_elevated(install_dir):
     if not os.path.isfile(target_path):
         return {"ok": False, "detail": "The elevated step finished but the plugin is not there"}
 
-    _log(f"install_ae_plugin_elevated: {target_path}")
+    _log(f"install_ae_plugin_elevated: {target_path}" +
+         (f" + {startup_path}" if startup_temp and os.path.isfile(startup_path) else ""))
     return {"ok": True, "path": target_path, "plugin_version": _fetch_plugin_version()}
 
 
 def uninstall_ae_plugin_elevated(install_dir):
-    """Removes the panel from the After Effects folder, with a UAC prompt."""
+    """Removes the panel and its startup script from the After Effects folder, with a UAC prompt."""
     target_path = os.path.join(_ae_system_scriptui_folder(install_dir), _AE_PLUGIN_FILENAME)
-    if not os.path.isfile(target_path):
+    startup_path = os.path.join(_ae_system_startup_folder(install_dir), _AE_STARTUP_FILENAME)
+    present = [p for p in (target_path, startup_path) if os.path.isfile(p)]
+    if not present:
         return {"ok": True, "detail": "Plugin was not installed there"}
 
-    body = f"[System.IO.File]::Delete({_ps_quote(target_path)})\n"
+    body = "".join(f"[System.IO.File]::Delete({_ps_quote(p)})\n" for p in present)
 
     ok, detail = _run_elevated_script(body)
     if not ok:
         return {"ok": False, "detail": detail}
 
-    if os.path.isfile(target_path):
+    if any(os.path.isfile(p) for p in present):
         return {"ok": False, "detail": "The elevated step finished but the plugin is still there"}
 
     _log(f"uninstall_ae_plugin_elevated: removed {target_path}")
