@@ -3081,6 +3081,49 @@ function openPopupNear(menuEl, anchorEl) {
   menuEl.style.top = `${Math.max(margin, top)}px`;
 }
 
+const AE_PLUGIN_CHANGES_URL = "https://github.com/projectMataNuiRising/mnrLauncher-afterEffects/commits/main";
+
+function makePluginInfo(record, state) {
+  // A small read-only block at the top of the link menu.
+  const info = record.plugin_info;
+  const published = record.plugin_published;
+  const box = document.createElement("div");
+  box.className = "popup-menu-info";
+
+  const add = (label, value, cls) => {
+    const row = document.createElement("div");
+    row.className = "popup-menu-info-row";
+    const l = document.createElement("span");
+    l.className = "popup-menu-info-label";
+    l.textContent = label;
+    const v = document.createElement("span");
+    v.className = "popup-menu-info-value" + (cls ? " " + cls : "");
+    v.textContent = value;
+    row.appendChild(l);
+    row.appendChild(v);
+    box.appendChild(row);
+  };
+
+  if (!info) {
+    add("Plugin", "not installed", "tile-plugin-problem");
+    return box;
+  }
+  add("Plugin", `${info.channel || "main"} ${info.version}`, `tile-plugin-${state}`);
+  add("Built", info.built || "before version stamps");
+  if (info.commit) add("Commit", info.commit);
+  if (published && published.version) {
+    const newer = state === "outdated";
+    add("Published", newer
+      ? `${published.channel || "main"} ${published.version} available`
+      : `${published.version} (up to date)`, newer ? "tile-plugin-outdated" : "");
+    if (newer && published.built) add("", `built ${published.built}`);
+  } else {
+    add("Published", "not checked yet");
+  }
+  add("Installed at", info.path || "");
+  return box;
+}
+
 function makeMenuItem(label, subLabel, onClick, danger) {
   const btn = document.createElement("button");
   btn.type = "button";
@@ -3277,6 +3320,15 @@ function renderConnectedTiles() {
     // healthy but is also not broken.
     const state = record.state || (record.healthy ? "ok" : "problem");
     const outdated = state === "outdated";
+
+    // The installed plugin's own version ("main 0.3.8"), in the same
+    // colour as the link icon so an out of date plugin stands out.
+    if (record.plugin_info && record.plugin_info.version) {
+      const plugin = document.createElement("span");
+      plugin.className = `tile-plugin tile-plugin-${state}`;
+      plugin.textContent = `${record.plugin_info.channel || "main"} ${record.plugin_info.version}`;
+      tile.appendChild(plugin);
+    }
     const chain = document.createElement("span");
     if (state === "problem") {
       chain.className = "tile-chain tile-chain-problem";
@@ -3326,6 +3378,11 @@ function openConnectionMenu(key, record, anchorEl) {
     connectionMenuProblem.classList.remove("hidden");
   }
 
+  // Plugin version details: what is installed, and what is published.
+  if (record.software_id === "after_effects" && !record.demo) {
+    connectionMenuItems.appendChild(makePluginInfo(record, state));
+  }
+
   // Repair is only for a genuinely broken connection. An out of date
   // plugin is not broken, it has Update plugin below instead.
   if (state === "problem") {
@@ -3363,6 +3420,15 @@ function openConnectionMenu(key, record, anchorEl) {
       await refreshSoftwareSection();
     })
   );
+
+  if (record.software_id === "after_effects") {
+    connectionMenuItems.appendChild(
+      makeMenuItem("See plugin changes", "Every change to the plugin, on GitHub", async () => {
+        closeAllPopups();
+        await window.pywebview.api.open_url(AE_PLUGIN_CHANGES_URL);
+      })
+    );
+  }
 
   connectionMenuItems.appendChild(
     makeMenuItem("Open install folder", record.install_dir, async () => {

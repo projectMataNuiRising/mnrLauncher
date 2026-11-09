@@ -709,6 +709,42 @@ body {
   color: var(--muted);
 }
 
+/* The installed plugin version on a connected tile, coloured like its link icon. */
+.tile-plugin {
+  font-size: 11px;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.tile-plugin-ok { color: var(--green); }
+.tile-plugin-outdated { color: var(--yellow); }
+.tile-plugin-problem { color: var(--red); }
+
+/* Read-only version details at the top of the link menu. */
+.popup-menu-info {
+  margin: 0 4px 6px 4px;
+  padding: 8px 10px;
+  background: var(--panel-alt);
+  border-radius: var(--radius);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.popup-menu-info-row {
+  display: flex;
+  gap: 10px;
+}
+.popup-menu-info-label {
+  flex: 0 0 72px;
+  color: var(--muted);
+}
+.popup-menu-info-value {
+  flex: 1 1 auto;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.popup-menu-info-value.tile-plugin-ok { color: var(--green); }
+.popup-menu-info-value.tile-plugin-outdated { color: var(--yellow); }
+.popup-menu-info-value.tile-plugin-problem { color: var(--red); }
+
 /* Placeholder screen */
 
 .placeholder-box {

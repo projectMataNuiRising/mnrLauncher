@@ -675,13 +675,23 @@ def _ae_system_scriptui_folder(install_dir):
 
 _PLUGIN_VERSION_RE = re.compile(r'PLUGIN_VERSION\s*=\s*["\']([^"\']+)["\']')
 
+# The plugin repo's "Stamp plugin version" action writes these on every
+# push to main, on the first lines of the panel.
+_PLUGIN_STAMP_RES = {
+    "version": _PLUGIN_VERSION_RE,
+    "channel": re.compile(r'PLUGIN_CHANNEL\s*=\s*["\']([^"\']*)["\']'),
+    "built": re.compile(r'PLUGIN_BUILT\s*=\s*["\']([^"\']*)["\']'),
+    "commit": re.compile(r'PLUGIN_COMMIT\s*=\s*["\']([^"\']*)["\']'),
+}
 
-def _read_installed_plugin_version(install_dir):
+
+def _read_installed_plugin_info(install_dir):
     """
-    Reads the version out of the installed panel itself rather than
-    trusting what we recorded when it was installed. The file on disk
-    is the truth: it can be replaced by hand, or left behind by an
-    older build, and the stored value would not know.
+    The version stamp of the installed panel: {version, channel, built,
+    commit, path}, or None when it is not installed. Read from the file
+    itself rather than what was recorded at install time: the file on
+    disk is the truth, it can be replaced by hand or left behind by an
+    older build. Panels from before the stamp have only a version.
     """
     if not install_dir:
         return None
@@ -690,12 +700,23 @@ def _read_installed_plugin_version(install_dir):
         return None
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
-            # The version sits near the top, no need to read it all.
-            head = f.read(4000)
-        match = _PLUGIN_VERSION_RE.search(head)
-        return match.group(1) if match else None
+            # The stamp sits at the top, no need to read it all.
+            head = f.read(6000)
     except Exception:
         return None
+    info = {"path": path}
+    for key, rx in _PLUGIN_STAMP_RES.items():
+        match = rx.search(head)
+        info[key] = match.group(1) if match else ""
+    if not info["version"]:
+        return None
+    info["channel"] = info["channel"] or "main"
+    return info
+
+
+def _read_installed_plugin_version(install_dir):
+    info = _read_installed_plugin_info(install_dir)
+    return info["version"] if info else None
 
 
 def _version_tuple(version):
@@ -716,14 +737,19 @@ def _plugin_update_available(installed, latest):
     return _version_tuple(latest) > _version_tuple(installed)
 
 
-def _fetch_plugin_version():
-    """Reads the version out of the plugin's own manifest, best effort."""
+def _fetch_plugin_manifest():
+    """The plugin's published manifest (build/plugin.json), best effort."""
     try:
         with _url_open(_AE_PLUGIN_MANIFEST, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        return data.get("version")
+            return json.loads(resp.read().decode("utf-8"))
     except Exception:
         return None
+
+
+def _fetch_plugin_version():
+    """Reads the version out of the plugin's own manifest, best effort."""
+    data = _fetch_plugin_manifest()
+    return data.get("version") if data else None
 
 
 def install_ae_plugin(version):
@@ -3199,6 +3225,9 @@ class MnrApi:
 
             health = _connection_health(record)
             out[key] = dict(record)
+            if record.get("software_id") == "after_effects" and not record.get("demo"):
+                # A local file read, cheap enough for every render.
+                out[key]["plugin_info"] = _read_installed_plugin_info(record.get("install_dir"))
             out[key]["state"] = health["state"]
             out[key]["healthy"] = health["state"] == "ok"
             out[key]["problem"] = health["reason"]
@@ -3384,9 +3413,16 @@ class MnrApi:
         if not ae_keys:
             return {"ok": True, "updates": []}
 
-        latest = _fetch_plugin_version()
+        manifest = _fetch_plugin_manifest() or {}
+        latest = manifest.get("version")
         if not latest:
             return {"ok": True, "updates": [], "detail": "Could not reach the plugin repository"}
+        published = {
+            "version": latest,
+            "channel": manifest.get("channel") or "main",
+            "built": manifest.get("built") or "",
+            "commit": manifest.get("commit") or "",
+        }
 
         updates = []
         changed = False
@@ -3397,6 +3433,11 @@ class MnrApi:
             # Keep the stored value honest while we are here.
             if installed and record.get("plugin_version") != installed:
                 record["plugin_version"] = installed
+                changed = True
+
+            # What is published, kept for the link menu.
+            if record.get("plugin_published") != published:
+                record["plugin_published"] = published
                 changed = True
 
             outdated = _plugin_update_available(installed, latest)
