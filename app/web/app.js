@@ -3996,6 +3996,19 @@ async function refreshParsecTile() {
 
     parsecTile.classList.remove("hidden");
 
+    // Parsec's own logo, read from the installed program. Until then
+    // (or when it is not installed) the plain icon stays.
+    if (info.icon) {
+      const iconWrap = document.getElementById("parsec-tile-icon");
+      const current = iconWrap.querySelector("img");
+      if (!current || current.src !== info.icon) {
+        const img = document.createElement("img");
+        img.src = info.icon;
+        img.alt = "Parsec";
+        iconWrap.replaceChildren(img);
+      }
+    }
+
     if (info.installed) {
       parsecTile.classList.remove("tile-disabled");
       parsecTileBadge.textContent = info.version ? "v" + info.version : "Installed";

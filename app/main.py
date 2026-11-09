@@ -1234,6 +1234,138 @@ def _exe_file_version(exe_path):
         return None
 
 
+_EXE_ICON_CACHE = {}
+
+
+def _exe_icon_data_url(exe_path, size=128):
+    """
+    The program's own icon, read out of its .exe, as a PNG data URL the
+    page can use as an <img> src. Used for the Parsec tile so it shows
+    Parsec's official logo exactly as installed, with nothing redrawn
+    or downloaded. Cached per exe path and modified time.
+
+    Returns None if anything at all goes wrong, the tile then keeps its
+    plain icon.
+    """
+    if platform.system() != "Windows" or not exe_path:
+        return None
+    try:
+        key = (exe_path, os.path.getmtime(exe_path), size)
+    except OSError:
+        return None
+    if key in _EXE_ICON_CACHE:
+        return _EXE_ICON_CACHE[key]
+
+    result = None
+    try:
+        import io
+        import base64
+        import ctypes
+        from ctypes import wintypes
+        from PIL import Image
+
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
+
+        class ICONINFO(ctypes.Structure):
+            _fields_ = [("fIcon", wintypes.BOOL),
+                        ("xHotspot", wintypes.DWORD),
+                        ("yHotspot", wintypes.DWORD),
+                        ("hbmMask", wintypes.HBITMAP),
+                        ("hbmColor", wintypes.HBITMAP)]
+
+        class BITMAP(ctypes.Structure):
+            _fields_ = [("bmType", wintypes.LONG),
+                        ("bmWidth", wintypes.LONG),
+                        ("bmHeight", wintypes.LONG),
+                        ("bmWidthBytes", wintypes.LONG),
+                        ("bmPlanes", wintypes.WORD),
+                        ("bmBitsPixel", wintypes.WORD),
+                        ("bmBits", ctypes.c_void_p)]
+
+        class BITMAPINFOHEADER(ctypes.Structure):
+            _fields_ = [("biSize", wintypes.DWORD),
+                        ("biWidth", wintypes.LONG),
+                        ("biHeight", wintypes.LONG),
+                        ("biPlanes", wintypes.WORD),
+                        ("biBitCount", wintypes.WORD),
+                        ("biCompression", wintypes.DWORD),
+                        ("biSizeImage", wintypes.DWORD),
+                        ("biXPelsPerMeter", wintypes.LONG),
+                        ("biYPelsPerMeter", wintypes.LONG),
+                        ("biClrUsed", wintypes.DWORD),
+                        ("biClrImportant", wintypes.DWORD)]
+
+        # Handles are pointer sized, so tell ctypes the real types.
+        user32.PrivateExtractIconsW.argtypes = [
+            wintypes.LPCWSTR, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            ctypes.POINTER(wintypes.HICON), ctypes.POINTER(wintypes.UINT),
+            wintypes.UINT, wintypes.UINT]
+        user32.PrivateExtractIconsW.restype = wintypes.UINT
+        user32.GetIconInfo.argtypes = [wintypes.HICON, ctypes.POINTER(ICONINFO)]
+        user32.DestroyIcon.argtypes = [wintypes.HICON]
+        user32.GetDC.argtypes = [wintypes.HWND]
+        user32.GetDC.restype = wintypes.HDC
+        user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+        gdi32.GetObjectW.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p]
+        gdi32.GetDIBits.argtypes = [wintypes.HDC, wintypes.HBITMAP, wintypes.UINT,
+                                    wintypes.UINT, ctypes.c_void_p, ctypes.c_void_p,
+                                    wintypes.UINT]
+        gdi32.DeleteObject.argtypes = [wintypes.HANDLE]
+
+        hicon = wintypes.HICON()
+        got = user32.PrivateExtractIconsW(exe_path, 0, size, size,
+                                          ctypes.byref(hicon), None, 1, 0)
+        if got != 1 or not hicon:
+            raise RuntimeError("no icon in exe")
+
+        info = ICONINFO()
+        hdc = None
+        try:
+            if not user32.GetIconInfo(hicon, ctypes.byref(info)) or not info.hbmColor:
+                raise RuntimeError("no colour bitmap")
+            bm = BITMAP()
+            gdi32.GetObjectW(info.hbmColor, ctypes.sizeof(bm), ctypes.byref(bm))
+            w, h = bm.bmWidth, bm.bmHeight
+
+            bih = BITMAPINFOHEADER()
+            bih.biSize = ctypes.sizeof(bih)
+            bih.biWidth = w
+            bih.biHeight = -h          # top-down rows
+            bih.biPlanes = 1
+            bih.biBitCount = 32
+            bih.biCompression = 0      # BI_RGB
+            pixels = ctypes.create_string_buffer(w * h * 4)
+
+            hdc = user32.GetDC(None)
+            if not gdi32.GetDIBits(hdc, info.hbmColor, 0, h, pixels,
+                                   ctypes.byref(bih), 0):
+                raise RuntimeError("could not read pixels")
+
+            img = Image.frombuffer("RGBA", (w, h), pixels.raw, "raw", "BGRA", 0, 1)
+            # Very old icons carry no alpha at all, show those solid.
+            if img.getchannel("A").getextrema() == (0, 0):
+                img.putalpha(255)
+
+            out = io.BytesIO()
+            img.save(out, format="PNG")
+            result = "data:image/png;base64," + base64.b64encode(out.getvalue()).decode("ascii")
+        finally:
+            if hdc:
+                user32.ReleaseDC(None, hdc)
+            if info.hbmColor:
+                gdi32.DeleteObject(info.hbmColor)
+            if info.hbmMask:
+                gdi32.DeleteObject(info.hbmMask)
+            user32.DestroyIcon(hicon)
+    except Exception as e:
+        _log(f"exe icon: could not read the icon from {exe_path}: {e}")
+        result = None
+
+    _EXE_ICON_CACHE[key] = result
+    return result
+
+
 def _scan_one_software(software_id):
     """
     Returns a list of {version, exe_path, install_dir} for every
@@ -2962,6 +3094,7 @@ class MnrApi:
             "path": path,
             "source": how,
             "version": version or "",
+            "icon": _exe_icon_data_url(path) or "",
         }
 
     def launch_parsec(self):
