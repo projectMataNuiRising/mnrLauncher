@@ -621,8 +621,14 @@ def _url_open(url_or_request, timeout=20):
 
 
 _AE_PLUGIN_RAW_BASE = "https://raw.githubusercontent.com/projectMataNuiRising/mnrLauncher-afterEffects/main"
-_AE_PLUGIN_FILENAME = "MNR_Launcher_Panel.jsx"
+_AE_PLUGIN_FILENAME = "MNR_Scene_Manager.jsx"
 _AE_PLUGIN_SOURCE = f"{_AE_PLUGIN_RAW_BASE}/src/{_AE_PLUGIN_FILENAME}"
+# Other panels installed next to it, in the same ScriptUI Panels folder.
+_AE_EXTRA_PANEL_FILENAMES = ("MNR_AE_Exporter.jsx",)
+# What the Scene Manager used to be called. Removed on install and
+# uninstall, and still read for its version so an old install shows
+# as needing an update.
+_AE_OLD_PANEL_FILENAMES = ("MNR_Launcher_Panel.jsx",)
 _AE_PLUGIN_MANIFEST = f"{_AE_PLUGIN_RAW_BASE}/build/plugin.json"
 # Run every time After Effects starts, from Scripts\Startup next to the
 # ScriptUI Panels folder: the Scene Manager (opens in place of the Home
@@ -635,6 +641,24 @@ _AE_STARTUP_FILENAMES = (
 
 def _ae_startup_source(filename):
     return f"{_AE_PLUGIN_RAW_BASE}/src/{filename}"
+
+
+def _ae_panel_source(filename):
+    return f"{_AE_PLUGIN_RAW_BASE}/src/{filename}"
+
+
+def _download_extra_panels():
+    """{filename: bytes} for the extra panels, skipping any that fail."""
+    out = {}
+    for name in _AE_EXTRA_PANEL_FILENAMES:
+        try:
+            with _url_open(_ae_panel_source(name), timeout=20) as resp:
+                data = resp.read()
+            if data.strip():
+                out[name] = data
+        except Exception as e:
+            _log(f"AE plugin: could not download {name} ({e})")
+    return out
 
 
 def _ae_user_scripts_root():
@@ -802,8 +826,13 @@ def _read_installed_plugin_info(install_dir):
     """
     if not install_dir:
         return None
-    path = os.path.join(_ae_system_scriptui_folder(install_dir), _AE_PLUGIN_FILENAME)
-    if not os.path.isfile(path):
+    folder = _ae_system_scriptui_folder(install_dir)
+    path = None
+    for name in (_AE_PLUGIN_FILENAME,) + _AE_OLD_PANEL_FILENAMES:
+        if os.path.isfile(os.path.join(folder, name)):
+            path = os.path.join(folder, name)
+            break
+    if not path:
         return None
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -881,6 +910,13 @@ def install_ae_plugin(version):
         os.makedirs(target_folder, exist_ok=True)
         with open(target_path, "wb") as f:
             f.write(source)
+        for name, data in _download_extra_panels().items():
+            with open(os.path.join(target_folder, name), "wb") as f:
+                f.write(data)
+        for name in _AE_OLD_PANEL_FILENAMES:
+            old = os.path.join(target_folder, name)
+            if os.path.isfile(old):
+                os.remove(old)
     except PermissionError:
         return {"ok": False, "detail": f"No permission to write to {target_folder}"}
     except Exception as e:
@@ -1058,6 +1094,17 @@ def install_ae_plugin_elevated(install_dir):
     target_folder = _ae_system_scriptui_folder(install_dir)
     target_path = os.path.join(target_folder, _AE_PLUGIN_FILENAME)
 
+    # The other panels (the AE Exporter) go in the same folder.
+    panel_copies = []            # (temp file, installed path)
+    for name, data in _download_extra_panels().items():
+        try:
+            panel_temp = os.path.join(tempfile.gettempdir(), name)
+            with open(panel_temp, "wb") as f:
+                f.write(data)
+            panel_copies.append((panel_temp, os.path.join(target_folder, name)))
+        except Exception as e:
+            _log(f"install_ae_plugin_elevated: could not stage {name} ({e})")
+
     # The startup scripts (Scene Manager at launch, project settings) go
     # in the same elevated step, so it is still one Windows prompt. A
     # plugin version without one simply installs without it.
@@ -1083,6 +1130,12 @@ def install_ae_plugin_elevated(install_dir):
         f"[System.IO.Directory]::CreateDirectory({_ps_quote(target_folder)}) | Out-Null\n"
         f"[System.IO.File]::Copy({_ps_quote(temp_path)}, {_ps_quote(target_path)}, $true)\n"
     )
+    for panel_temp, panel_path in panel_copies:
+        body += f"[System.IO.File]::Copy({_ps_quote(panel_temp)}, {_ps_quote(panel_path)}, $true)\n"
+    for name in _AE_OLD_PANEL_FILENAMES:
+        old = os.path.join(target_folder, name)
+        if os.path.isfile(old):
+            body += f"[System.IO.File]::Delete({_ps_quote(old)})\n"
     if startup_copies:
         body += f"[System.IO.Directory]::CreateDirectory({_ps_quote(startup_folder)}) | Out-Null\n"
         for startup_temp, startup_path in startup_copies:
@@ -1095,7 +1148,7 @@ def install_ae_plugin_elevated(install_dir):
     if not os.path.isfile(target_path):
         return {"ok": False, "detail": "The elevated step finished but the plugin is not there"}
 
-    installed = [p for _t, p in startup_copies if os.path.isfile(p)]
+    installed = [p for _t, p in panel_copies + startup_copies if os.path.isfile(p)]
     _log(f"install_ae_plugin_elevated: {target_path}" +
          "".join(f" + {p}" for p in installed))
     return {"ok": True, "path": target_path, "plugin_version": _fetch_plugin_version()}
@@ -1103,10 +1156,13 @@ def install_ae_plugin_elevated(install_dir):
 
 def uninstall_ae_plugin_elevated(install_dir):
     """Removes the panel and its startup script from the After Effects folder, with a UAC prompt."""
-    target_path = os.path.join(_ae_system_scriptui_folder(install_dir), _AE_PLUGIN_FILENAME)
+    panel_folder = _ae_system_scriptui_folder(install_dir)
+    target_path = os.path.join(panel_folder, _AE_PLUGIN_FILENAME)
+    panel_paths = [os.path.join(panel_folder, n)
+                   for n in _AE_EXTRA_PANEL_FILENAMES + _AE_OLD_PANEL_FILENAMES]
     startup_folder = _ae_system_startup_folder(install_dir)
     startup_paths = [os.path.join(startup_folder, n) for n in _AE_STARTUP_FILENAMES]
-    present = [p for p in [target_path] + startup_paths if os.path.isfile(p)]
+    present = [p for p in [target_path] + panel_paths + startup_paths if os.path.isfile(p)]
     if not present:
         return {"ok": True, "detail": "Plugin was not installed there"}
 
@@ -1124,18 +1180,18 @@ def uninstall_ae_plugin_elevated(install_dir):
 
 
 def _ae_plugin_locations(version, install_dir=None, year=None):
-    """Every place the panel might be, user location first."""
-    spots = [_ae_plugin_path(version)]
+    """Every place the panels might be, user location first."""
+    names = (_AE_PLUGIN_FILENAME,) + _AE_EXTRA_PANEL_FILENAMES + _AE_OLD_PANEL_FILENAMES
+    spots = [os.path.join(_ae_scriptui_folder(version), n) for n in names]
     if install_dir:
-        spots.append(os.path.join(_ae_system_scriptui_folder(install_dir), _AE_PLUGIN_FILENAME))
+        spots += [os.path.join(_ae_system_scriptui_folder(install_dir), n) for n in names]
     # An earlier build wrote to the Documents folder, which After
     # Effects never actually reads. Clean that up if it is still there
     # so removing a connection does not leave a stray file behind.
     if year:
         documents = os.path.join(os.path.expanduser("~"), "Documents")
-        spots.append(os.path.join(
-            documents, "Adobe", f"After Effects {year}",
-            "Scripts", "ScriptUI Panels", _AE_PLUGIN_FILENAME))
+        spots += [os.path.join(documents, "Adobe", f"After Effects {year}",
+                               "Scripts", "ScriptUI Panels", n) for n in names]
     return spots
 
 
