@@ -665,6 +665,95 @@ def _ae_scriptui_folder(version):
     return os.path.join(base, folder, "Scripts", "ScriptUI Panels")
 
 
+# After Effects preferences switched off before every launch from the
+# launcher. "Show Welcome Screen" is the Home screen (Preferences >
+# Startup & Repair > Enable Home Screen); found in the prefs file, Adobe
+# does not document it.
+_AE_PREFS_OFF = (
+    ("General Section", "Show Welcome Screen"),
+)
+
+
+def _ae_running():
+    """True while any After Effects is running (its prefs would be written over on quit)."""
+    if not HAS_PSUTIL:
+        return False
+    for proc in psutil.process_iter(["name"]):
+        try:
+            if (proc.info.get("name") or "").lower() == "afterfx.exe":
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _set_pref_off(text, section, key):
+    """
+    Returns (new_text, changed). Sets "key" = 01 to 00 inside ["section"]
+    of an After Effects prefs text file, leaving every other byte alone.
+    """
+    out = []
+    in_section = False
+    changed = False
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_section = stripped == '["%s"]' % section
+        elif in_section:
+            m = re.match(r'^(\s*"%s"\s*=\s*)01(\s*)$' % re.escape(key), line)
+            if m:
+                line = m.group(1) + "00" + m.group(2)
+                changed = True
+        out.append(line)
+    return "".join(out), changed
+
+
+def ae_turn_off_home_screen(version):
+    """
+    Switches the After Effects Home screen off in this version's
+    preference files, before After Effects starts. Only touches files that
+    have the setting switched on, keeps a one-time backup of each file it
+    changes (<name>.mnr-backup), and does nothing while After Effects is
+    running, since it rewrites its preferences on quit. Never raises.
+    """
+    try:
+        if _ae_running():
+            return []
+        base = _ae_user_scripts_root()
+        major = str(version or "").split(".")[0]
+        changed_files = []
+        for folder in (_safe_listdir(base) or []):
+            path = os.path.join(base, folder)
+            if not os.path.isdir(path) or folder.split(".")[0] != major:
+                continue
+            for name in (_safe_listdir(path) or []):
+                if not name.lower().endswith(".txt") or "prefs" not in name.lower():
+                    continue
+                file_path = os.path.join(path, name)
+                try:
+                    with open(file_path, "r", encoding="utf-8", errors="surrogateescape", newline="") as f:
+                        text = f.read()
+                except Exception:
+                    continue
+                new_text, changed = text, False
+                for section, key in _AE_PREFS_OFF:
+                    new_text, did = _set_pref_off(new_text, section, key)
+                    changed = changed or did
+                if not changed:
+                    continue
+                backup = file_path + ".mnr-backup"
+                if not os.path.exists(backup):
+                    shutil.copy2(file_path, backup)
+                with open(file_path, "w", encoding="utf-8", errors="surrogateescape", newline="") as f:
+                    f.write(new_text)
+                changed_files.append(file_path)
+                _log(f"ae_turn_off_home_screen: switched off in {file_path}")
+        return changed_files
+    except Exception as e:
+        _log(f"ae_turn_off_home_screen: skipped ({e})")
+        return []
+
+
 def _ae_plugin_path(version):
     return os.path.join(_ae_scriptui_folder(version), _AE_PLUGIN_FILENAME)
 
@@ -3539,6 +3628,10 @@ class MnrApi:
         exe_path = record.get("exe_path")
         if not exe_path or not os.path.isfile(exe_path):
             return {"ok": False, "detail": "The software is no longer at the path it was connected from"}
+
+        if record.get("software_id") == "after_effects":
+            # The MNR Scene Manager opens instead of After Effects' Home screen.
+            ae_turn_off_home_screen(record.get("version"))
 
         try:
             subprocess.Popen([exe_path], cwd=os.path.dirname(exe_path))
