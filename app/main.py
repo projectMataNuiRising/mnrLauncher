@@ -696,14 +696,22 @@ def _ae_scriptui_folder(version):
     return os.path.join(base, folder, "Scripts", "ScriptUI Panels")
 
 
-# After Effects preferences switched off before every launch from the
-# launcher, so only the MNR Scene Manager opens. "Show Welcome Screen" is
-# the Home screen (Preferences > Startup & Repair > Enable Home Screen),
-# "Show Tip of the Day" the tip popup next to it. Found in the prefs file,
-# Adobe does not document them.
-_AE_PREFS_OFF = (
-    ("General Section", "Show Welcome Screen"),
-    ("General Section", "Show Tip of the Day"),
+# After Effects preferences set before every launch from the launcher.
+# Found in the prefs files, Adobe does not document them.
+#   "Show Welcome Screen"  the Home screen (Preferences > Startup & Repair >
+#                          Enable Home Screen), off so only the MNR Scene
+#                          Manager opens
+#   "Show Tip of the Day"  the tip popup next to it, off
+#   "Pref_SCRIPTING_FILE_NETWORK_SECURITY"
+#                          Preferences > Scripting & Expressions > "Allow
+#                          Scripts to Write Files and Access Network", on,
+#                          the MNR Scene Manager and AE Exporter need it
+# Each is (sections it can be in, key, value when wrong, value to set).
+_AE_PREFS_SET = (
+    (("General Section",), "Show Welcome Screen", "01", "00"),
+    (("General Section",), "Show Tip of the Day", "01", "00"),
+    (("Main Pref Section v2", "Main Pref Section"),
+     "Pref_SCRIPTING_FILE_NETWORK_SECURITY", '"0"', '"1"'),
 )
 
 
@@ -720,34 +728,37 @@ def _ae_running():
     return False
 
 
-def _set_pref_off(text, section, key):
+def _set_pref(text, sections, key, wrong, right):
     """
-    Returns (new_text, changed). Sets "key" = 01 to 00 inside ["section"]
-    of an After Effects prefs text file, leaving every other byte alone.
+    Returns (new_text, changed). Inside any of ["sections"] of an After
+    Effects prefs text file, sets "key" = <wrong> to <right>, leaving every
+    other byte alone. A key that is missing is left missing.
     """
+    headers = set('["%s"]' % sec for sec in sections)
     out = []
     in_section = False
     changed = False
     for line in text.splitlines(keepends=True):
         stripped = line.strip()
         if stripped.startswith("[") and stripped.endswith("]"):
-            in_section = stripped == '["%s"]' % section
+            in_section = stripped in headers
         elif in_section:
-            m = re.match(r'^(\s*"%s"\s*=\s*)01(\s*)$' % re.escape(key), line)
+            m = re.match(r'^(\s*"%s"\s*=\s*)%s(\s*)$' % (re.escape(key), re.escape(wrong)), line)
             if m:
-                line = m.group(1) + "00" + m.group(2)
+                line = m.group(1) + right + m.group(2)
                 changed = True
         out.append(line)
     return "".join(out), changed
 
 
-def ae_turn_off_home_screen(version):
+def ae_apply_mnr_prefs(version):
     """
-    Switches the After Effects Home screen off in this version's
-    preference files, before After Effects starts. Only touches files that
-    have the setting switched on, keeps a one-time backup of each file it
-    changes (<name>.mnr-backup), and does nothing while After Effects is
-    running, since it rewrites its preferences on quit. Never raises.
+    Sets the MNR After Effects preferences (_AE_PREFS_SET: Home screen and
+    tips off, scripts allowed to write files) in this version's preference
+    files, before After Effects starts. Only touches files where one is
+    set the other way, keeps a one-time backup of each file it changes
+    (<name>.mnr-backup), and does nothing while After Effects is running,
+    since it rewrites its preferences on quit. Never raises.
     """
     try:
         if _ae_running():
@@ -769,8 +780,8 @@ def ae_turn_off_home_screen(version):
                 except Exception:
                     continue
                 new_text, changed = text, False
-                for section, key in _AE_PREFS_OFF:
-                    new_text, did = _set_pref_off(new_text, section, key)
+                for sections, key, wrong, right in _AE_PREFS_SET:
+                    new_text, did = _set_pref(new_text, sections, key, wrong, right)
                     changed = changed or did
                 if not changed:
                     continue
@@ -780,10 +791,10 @@ def ae_turn_off_home_screen(version):
                 with open(file_path, "w", encoding="utf-8", errors="surrogateescape", newline="") as f:
                     f.write(new_text)
                 changed_files.append(file_path)
-                _log(f"ae_turn_off_home_screen: switched off in {file_path}")
+                _log(f"ae_apply_mnr_prefs: set in {file_path}")
         return changed_files
     except Exception as e:
-        _log(f"ae_turn_off_home_screen: skipped ({e})")
+        _log(f"ae_apply_mnr_prefs: skipped ({e})")
         return []
 
 
@@ -3829,8 +3840,9 @@ class MnrApi:
             return {"ok": False, "detail": "The software is no longer at the path it was connected from"}
 
         if record.get("software_id") == "after_effects":
-            # The MNR Scene Manager opens instead of After Effects' Home screen.
-            ae_turn_off_home_screen(record.get("version"))
+            # The MNR Scene Manager opens instead of After Effects' Home
+            # screen, and scripts may write files (Scene Manager, Exporter).
+            ae_apply_mnr_prefs(record.get("version"))
 
         try:
             subprocess.Popen([exe_path], cwd=os.path.dirname(exe_path))
