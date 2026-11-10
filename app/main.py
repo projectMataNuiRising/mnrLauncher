@@ -623,8 +623,10 @@ def _url_open(url_or_request, timeout=20):
 _AE_PLUGIN_RAW_BASE = "https://raw.githubusercontent.com/projectMataNuiRising/mnrLauncher-afterEffects/main"
 _AE_PLUGIN_FILENAME = "MNR_Scene_Manager.jsx"
 _AE_PLUGIN_SOURCE = f"{_AE_PLUGIN_RAW_BASE}/src/{_AE_PLUGIN_FILENAME}"
-# Other panels installed next to it, in the same ScriptUI Panels folder.
-_AE_EXTRA_PANEL_FILENAMES = ("MNR_AE_Exporter.jsx",)
+# Other files installed next to it, in the same ScriptUI Panels folder:
+# the AE Exporter panel and its presets project (the Output Module
+# templates it renders with). One that is not in the repo yet is skipped.
+_AE_EXTRA_PANEL_FILENAMES = ("MNR_AE_Exporter.jsx", "MNR_Export_Presets.aep")
 # What the Scene Manager used to be called. Removed on install and
 # uninstall, and still read for its version so an old install shows
 # as needing an update.
