@@ -644,11 +644,30 @@ _AE_PLUGIN_MANIFEST = f"{_AE_PLUGIN_RAW_BASE}/build/plugin.json"
 _AE_STARTUP_FILENAMES = (
     "MNR_Scene_Manager_Startup.jsx",
     "MNR_Project_Settings_Startup.jsx",
+    "MNR_Relink_Startup.jsx",
 )
 
 
 def _ae_startup_source(filename):
     return f"{_AE_PLUGIN_RAW_BASE}/src/{filename}"
+
+
+def _startup_files():
+    """[(installed name, repo path)] for Scripts\\Startup, from the plugin's
+    manifest (files with "folder": "Scripts/Startup"), else the list above."""
+    manifest = _fetch_plugin_manifest()
+    out = []
+    try:
+        for entry in (manifest or {}).get("files", []):
+            if entry.get("folder") != "Scripts/Startup" or entry.get("install") is False:
+                continue
+            name = entry.get("install_as") or os.path.basename(entry.get("source", ""))
+            if name:
+                out.append((name, entry.get("source") or f"src/{name}"))
+    except Exception as e:
+        _log(f"AE plugin: could not read the manifest's startup files ({e})")
+        out = []
+    return out or [(n, f"src/{n}") for n in _AE_STARTUP_FILENAMES]
 
 
 def _ae_panel_source(filename):
@@ -1159,9 +1178,9 @@ def install_ae_plugin_elevated(install_dir):
     # plugin version without one simply installs without it.
     startup_folder = _ae_system_startup_folder(install_dir)
     startup_copies = []          # (temp file, installed path)
-    for name in _AE_STARTUP_FILENAMES:
+    for name, source in _startup_files():
         try:
-            with _url_open(_ae_startup_source(name), timeout=20) as resp:
+            with _url_open(f"{_AE_PLUGIN_RAW_BASE}/{source}", timeout=20) as resp:
                 startup_source = resp.read()
             if startup_source.strip():
                 startup_temp = os.path.join(tempfile.gettempdir(), name)
@@ -1210,7 +1229,8 @@ def uninstall_ae_plugin_elevated(install_dir):
     target_path = os.path.join(panel_folder, _AE_PLUGIN_FILENAME)
     panel_paths = [os.path.join(panel_folder, n) for n in _ae_extra_names_in(panel_folder)]
     startup_folder = _ae_system_startup_folder(install_dir)
-    startup_paths = [os.path.join(startup_folder, n) for n in _AE_STARTUP_FILENAMES]
+    startup_names = set(_AE_STARTUP_FILENAMES) | set(n for n, _src in _startup_files())
+    startup_paths = [os.path.join(startup_folder, n) for n in sorted(startup_names)]
     present = [p for p in [target_path] + panel_paths + startup_paths if os.path.isfile(p)]
     if not present:
         return {"ok": True, "detail": "Plugin was not installed there"}
