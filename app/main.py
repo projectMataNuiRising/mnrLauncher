@@ -624,9 +624,15 @@ _AE_PLUGIN_RAW_BASE = "https://raw.githubusercontent.com/projectMataNuiRising/mn
 _AE_PLUGIN_FILENAME = "MNR_Scene_Manager.jsx"
 _AE_PLUGIN_SOURCE = f"{_AE_PLUGIN_RAW_BASE}/src/{_AE_PLUGIN_FILENAME}"
 # Other files installed next to it, in the same ScriptUI Panels folder:
-# the AE Exporter panel and its presets project (the Output Module
-# templates it renders with). One that is not in the repo yet is skipped.
-_AE_EXTRA_PANEL_FILENAMES = ("MNR_AE_Exporter.jsx", "MNR_Export_Presets.aep")
+# the AE Exporter panel and its presets projects (the Output Module
+# templates it renders with, one per After Effects version). The list
+# comes from the plugin's manifest (build/plugin.json: files with no
+# "folder"), so new presets versions need no launcher change. This is
+# only used when the manifest cannot be read.
+_AE_EXTRA_PANEL_FILENAMES = ("MNR_AE_Exporter.jsx",)
+# Presets projects, any version (MNR_Export_Presets_2026_v001.aep). Ones
+# the manifest no longer lists are removed on install.
+_AE_PRESETS_RE = re.compile(r"^MNR_Export_Presets(_\d{4}_v\d+)?\.aep$", re.IGNORECASE)
 # What the Scene Manager used to be called. Removed on install and
 # uninstall, and still read for its version so an old install shows
 # as needing an update.
@@ -649,12 +655,39 @@ def _ae_panel_source(filename):
     return f"{_AE_PLUGIN_RAW_BASE}/src/{filename}"
 
 
+def _extra_panel_files():
+    """[(installed name, repo path)] for the files next to the Scene Manager."""
+    manifest = _fetch_plugin_manifest()
+    out = []
+    try:
+        for entry in (manifest or {}).get("files", []):
+            name = entry.get("install_as") or os.path.basename(entry.get("source", ""))
+            if (entry.get("folder") or entry.get("install") is False or not name
+                    or name == _AE_PLUGIN_FILENAME):
+                continue
+            out.append((name, entry.get("source") or f"src/{name}"))
+    except Exception as e:
+        _log(f"AE plugin: could not read the manifest's file list ({e})")
+        out = []
+    return out or [(n, f"src/{n}") for n in _AE_EXTRA_PANEL_FILENAMES]
+
+
+def _ae_extra_names_in(folder):
+    """Extra files (any presets version included) already in a folder."""
+    names = set(_AE_EXTRA_PANEL_FILENAMES + _AE_OLD_PANEL_FILENAMES)
+    try:
+        names.update(n for n in os.listdir(folder) if _AE_PRESETS_RE.match(n))
+    except OSError:
+        pass
+    return sorted(names)
+
+
 def _download_extra_panels():
-    """{filename: bytes} for the extra panels, skipping any that fail."""
+    """{filename: bytes} for the extra panel files, skipping any that fail."""
     out = {}
-    for name in _AE_EXTRA_PANEL_FILENAMES:
+    for name, source in _extra_panel_files():
         try:
-            with _url_open(_ae_panel_source(name), timeout=20) as resp:
+            with _url_open(f"{_AE_PLUGIN_RAW_BASE}/{source}", timeout=60) as resp:
                 data = resp.read()
             if data.strip():
                 out[name] = data
@@ -923,12 +956,14 @@ def install_ae_plugin(version):
         os.makedirs(target_folder, exist_ok=True)
         with open(target_path, "wb") as f:
             f.write(source)
-        for name, data in _download_extra_panels().items():
+        extras = _download_extra_panels()
+        for name, data in extras.items():
             with open(os.path.join(target_folder, name), "wb") as f:
                 f.write(data)
-        for name in _AE_OLD_PANEL_FILENAMES:
+        for name in _ae_extra_names_in(target_folder):
+            stale = name in _AE_OLD_PANEL_FILENAMES or (_AE_PRESETS_RE.match(name) and name not in extras)
             old = os.path.join(target_folder, name)
-            if os.path.isfile(old):
+            if stale and os.path.isfile(old):
                 os.remove(old)
     except PermissionError:
         return {"ok": False, "detail": f"No permission to write to {target_folder}"}
@@ -1109,7 +1144,8 @@ def install_ae_plugin_elevated(install_dir):
 
     # The other panels (the AE Exporter) go in the same folder.
     panel_copies = []            # (temp file, installed path)
-    for name, data in _download_extra_panels().items():
+    extras = _download_extra_panels()
+    for name, data in extras.items():
         try:
             panel_temp = os.path.join(tempfile.gettempdir(), name)
             with open(panel_temp, "wb") as f:
@@ -1145,9 +1181,10 @@ def install_ae_plugin_elevated(install_dir):
     )
     for panel_temp, panel_path in panel_copies:
         body += f"[System.IO.File]::Copy({_ps_quote(panel_temp)}, {_ps_quote(panel_path)}, $true)\n"
-    for name in _AE_OLD_PANEL_FILENAMES:
+    for name in _ae_extra_names_in(target_folder):
+        stale = name in _AE_OLD_PANEL_FILENAMES or (_AE_PRESETS_RE.match(name) and name not in extras)
         old = os.path.join(target_folder, name)
-        if os.path.isfile(old):
+        if stale and os.path.isfile(old):
             body += f"[System.IO.File]::Delete({_ps_quote(old)})\n"
     if startup_copies:
         body += f"[System.IO.Directory]::CreateDirectory({_ps_quote(startup_folder)}) | Out-Null\n"
@@ -1171,8 +1208,7 @@ def uninstall_ae_plugin_elevated(install_dir):
     """Removes the panel and its startup script from the After Effects folder, with a UAC prompt."""
     panel_folder = _ae_system_scriptui_folder(install_dir)
     target_path = os.path.join(panel_folder, _AE_PLUGIN_FILENAME)
-    panel_paths = [os.path.join(panel_folder, n)
-                   for n in _AE_EXTRA_PANEL_FILENAMES + _AE_OLD_PANEL_FILENAMES]
+    panel_paths = [os.path.join(panel_folder, n) for n in _ae_extra_names_in(panel_folder)]
     startup_folder = _ae_system_startup_folder(install_dir)
     startup_paths = [os.path.join(startup_folder, n) for n in _AE_STARTUP_FILENAMES]
     present = [p for p in [target_path] + panel_paths + startup_paths if os.path.isfile(p)]
@@ -1194,10 +1230,13 @@ def uninstall_ae_plugin_elevated(install_dir):
 
 def _ae_plugin_locations(version, install_dir=None, year=None):
     """Every place the panels might be, user location first."""
-    names = (_AE_PLUGIN_FILENAME,) + _AE_EXTRA_PANEL_FILENAMES + _AE_OLD_PANEL_FILENAMES
-    spots = [os.path.join(_ae_scriptui_folder(version), n) for n in names]
+    user_folder = _ae_scriptui_folder(version)
+    names = [_AE_PLUGIN_FILENAME] + _ae_extra_names_in(user_folder)
+    spots = [os.path.join(user_folder, n) for n in names]
     if install_dir:
-        spots += [os.path.join(_ae_system_scriptui_folder(install_dir), n) for n in names]
+        system_folder = _ae_system_scriptui_folder(install_dir)
+        spots += [os.path.join(system_folder, n)
+                  for n in [_AE_PLUGIN_FILENAME] + _ae_extra_names_in(system_folder)]
     # An earlier build wrote to the Documents folder, which After
     # Effects never actually reads. Clean that up if it is still there
     # so removing a connection does not leave a stray file behind.
