@@ -629,7 +629,7 @@ _AE_PLUGIN_SOURCE = f"{_AE_PLUGIN_RAW_BASE}/src/{_AE_PLUGIN_FILENAME}"
 # comes from the plugin's manifest (build/plugin.json: files with no
 # "folder"), so new presets versions need no launcher change. This is
 # only used when the manifest cannot be read.
-_AE_EXTRA_PANEL_FILENAMES = ("MNR_AE_Exporter.jsx",)
+_AE_EXTRA_PANEL_FILENAMES = ("MNR_AE_Exporter.jsx", "MNR_Toolbar.jsx")
 # Presets projects, any version (MNR_Export_Presets_2026_v001.aep). Ones
 # the manifest no longer lists are removed on install.
 _AE_PRESETS_RE = re.compile(r"^MNR_Export_Presets(_\d{4}_v\d+)?\.aep$", re.IGNORECASE)
