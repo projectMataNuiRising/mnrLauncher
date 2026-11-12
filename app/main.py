@@ -645,6 +645,7 @@ _AE_STARTUP_FILENAMES = (
     "MNR_Scene_Manager_Startup.jsx",
     "MNR_Project_Settings_Startup.jsx",
     "MNR_Relink_Startup.jsx",
+    "MNR_Toolbar_Startup.jsx",
 )
 
 
