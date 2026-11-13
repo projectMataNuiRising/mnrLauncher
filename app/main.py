@@ -2937,6 +2937,26 @@ class MnrApi:
         return {"ok": True, "current_user": username}
 
     # --------------------------------------------------------
+    # Cave Roll, the hidden game (web/game/cave_roll.js): best score,
+    # kept in state.json on this computer.
+    def game_get_best(self):
+        try:
+            return {"best": int(read_local_state().get("cave_roll_best", 0))}
+        except Exception:
+            return {"best": 0}
+
+    def game_save_best(self, score):
+        try:
+            score = int(score)
+            state = read_local_state()
+            if score > int(state.get("cave_roll_best", 0)):
+                state["cave_roll_best"] = score
+                write_local_state(state)
+            return {"ok": True, "best": int(state.get("cave_roll_best", 0))}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    # --------------------------------------------------------
     # Project / Episode / Sequence / Shot dropdown cascade.
     # These are all position-based, not name-based: dropdown 3 just
     # lists whatever is one level under dropdown 2's pick, dropdown 4
