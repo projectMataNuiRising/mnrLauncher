@@ -2945,6 +2945,34 @@ class MnrApi:
         except Exception:
             return {"best": 0}
 
+    def game_load(self):
+        """Cave Roll's saved state: best score, unlocked colours, colour."""
+        try:
+            state = read_local_state()
+            data = dict(state.get("cave_roll", {}))
+            data["best"] = max(int(data.get("best", 0)), int(state.get("cave_roll_best", 0)))
+            return data
+        except Exception:
+            return {}
+
+    def game_save(self, data):
+        try:
+            state = read_local_state()
+            old = dict(state.get("cave_roll", {}))
+            data = dict(data or {})
+            data["best"] = max(int(data.get("best", 0)), int(old.get("best", 0)),
+                               int(state.get("cave_roll_best", 0)))
+            unlocked = list(old.get("unlocked", []))
+            for k in data.get("unlocked", []):
+                if k not in unlocked:
+                    unlocked.append(k)
+            data["unlocked"] = unlocked
+            state["cave_roll"] = data
+            write_local_state(state)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     def game_save_best(self, score):
         try:
             score = int(score)

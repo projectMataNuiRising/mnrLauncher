@@ -5,21 +5,29 @@
 
    A Chrome-dino style runner, but fast: the little guy waits (b_01),
    hops off (b_02), then rolls (b_03), faster and faster, through six
-   places, 500 points each, then round again:
+   places, 1000 points each, then round again:
 
      Onu-Koro   the cave: stalagmites and stalactites
      Ta-Koro    the fire cave: stalactites and lava pits
-     Po-Koro    out of the cave into the desert: stones
+     Po-Koro    out of the cave into the desert: rolling hills and stones
      Ga-Koro    over the ocean: jump from leaf to leaf
-     Le-Koro    the forest: trees, bushes and hanging branches
-     Ko-Koro    the snow: ice spikes, then back into the cave
+     Le-Koro    the forest: trees, bushes, hanging branches, and
+                stumps you can land on (but not roll into)
+     Ko-Koro    the snow: ice spikes, and cracked icicles you smash
+                through on the ground (jump into one and you're done),
+                then back into the cave
 
    Tap for a short hop, hold for a big jump. Things hanging from above
    sit where a hop passes under them and a big jump does not.
 
-   A swarm of his buddies races along on the ledges further back, some
-   passing him, some being passed. Ones that come in after a place
-   changes take that place's colours (game/sprites/b_03_0#_<place>.png).
+   Colours: you start black (Onu-Koro). Reaching a place unlocks its
+   colour; pick it with Left / Right before a run. The swarm of buddies
+   racing on the ledges behind takes each place's colours as they come
+   in. Sprites: game/sprites/b_0#_##.png is the green (Le-Koro) one,
+   game/sprites/<place>/ the others.
+
+   Hit something and he's knocked out of his ball and tumbles off the
+   screen. Fall into lava or water and he drops in, still rolled up.
 
    Everything runs at a fixed 60 ticks a second and is drawn at the
    sprites' own pixel size (one game pixel = one sprite pixel), then
@@ -28,7 +36,8 @@
    After a game over the restart plays one idle cycle, the hop, then
    rolls.
 
-   Best score is kept per computer by MNR Launcher (state.json). */
+   Best score, unlocked colours and the colour picked are kept per
+   computer by MNR Launcher (state.json). */
 
 (function () {
   "use strict";
@@ -39,7 +48,7 @@
   const CEIL = 12;                   // y of the cave roof (roughly)
   const BALL_X = 56;                 // x of the ball's centre
   const BALL_R = 20.5;               // ball radius (b_03 is 41 px wide)
-  const HIT_R = 17;                  // a little forgiving
+  const HIT_R = 16;                  // a little forgiving
   const TICK_MS = 1000 / 60;
   const HOLD = 2;                    // ticks each sprite is shown
   const ROLL_STEP = 22.5;            // degrees turned every tick
@@ -55,9 +64,9 @@
   const TIP_MIN = 44, TIP_MAX = 52;
 
   // Speed (px per tick): picks up fast, then keeps creeping up.
-  const SPEED_START = 4.2, SPEED_RUSH = 7.8, SPEED_RUSH_TICKS = 700;
-  const SPEED_CREEP = 0.0006, SPEED_MAX = 15;
-  const PLACE_POINTS = 500;          // a new place every this many points
+  const SPEED_START = 4.0, SPEED_RUSH = 6.8, SPEED_RUSH_TICKS = 900;
+  const SPEED_CREEP = 0.0005, SPEED_MAX = 13.5;
+  const PLACE_POINTS = 1000;         // a new place every this many points
 
   function speedAt(t) {
     return Math.min(SPEED_MAX,
@@ -72,29 +81,29 @@
   // -- The places -------------------------------------------------------
   // look: how the background is drawn. ground: "solid" or "water" (only
   // the leaves hold you up). weights: how often each obstacle comes up.
-  const ROCK = { light: "#7d7186", base: "#5a5061", dark: "#3b3442", line: "#1a1720" };
   const PLACES = [
     {
       key: "onu", name: "ONU-KORO", title: "#b8f0c8", look: "cave", cave: true, ground: "solid",
-      wall: ["#24212c", "#28252f", "#2b2833"],
-      far: ["#2d2a36", "#3b3746"], mid: ["#211f29", "#322e3c"], big: ["#1c1a23", "#2a2733"],
-      roof: ["#2b2733", "#3a3444", "#0f0e13", "#332e3c", "#25212c"],
-      floor: ["#2e2935", "#4b4354", "#3a3443", "#3a3443", "#221e28"],
-      glow: { kind: "pulse", cols: ["#2f8a52", "#7dffaa"] },
-      spike: ROCK, rim: "#b4a8c4", dust: ["#6b6275", "#4b4354"],
-      haze: ["#3b3746", "#322e3c"],
+      wall: ["#45414f", "#4b4756", "#504c5c"],
+      far: ["#524d5e", "#66607a"], mid: ["#3e3a4a", "#585269"], big: ["#38344a", "#4a4560"],
+      roof: ["#4a4658", "#6a6480", "#1c1a22", "#55506a", "#3e3a4a"],
+      floor: ["#504a5c", "#78708a", "#5e576e", "#5e576e", "#3e3848"],
+      glow: { kind: "pulse", cols: ["#3a9a5e", "#8dffb4"] },
+      spike: { light: "#d4c8e0", base: "#9a8eac", dark: "#655a76", line: "#1e1826" },
+      rim: "#e0d6ee", dust: ["#8a8298", "#605870"],
+      haze: ["#66607a", "#585269"],
       weights: { tall: 26, short: 16, tapUnder: 16, lone: 12, double: 10, row: 5 }
     },
     {
       key: "ta", name: "TA-KORO", title: "#ffb050", look: "cave", cave: true, ground: "solid",
-      wall: ["#2a1916", "#331f1a", "#3a231d"],
-      far: ["#3a211b", "#5a3022"], mid: ["#2a1713", "#4a2618"], big: ["#22120f", "#3a1d14"],
-      roof: ["#2f1a15", "#5a2a1c", "#120806", "#3e2219", "#26140f"],
-      floor: ["#33201a", "#9a4a22", "#5a2c1c", "#4e2a1e", "#22130e"],
+      wall: ["#2e1b17", "#38211b", "#40271f"],
+      far: ["#40241d", "#603424"], mid: ["#2e1914", "#50291a"], big: ["#26140f", "#3e2016"],
+      roof: ["#341d17", "#6a3220", "#120806", "#44251b", "#2a1611"],
+      floor: ["#38221b", "#a65024", "#62301e", "#542d20", "#26150f"],
       glow: { kind: "pulse", cols: ["#a8401a", "#ffb050"] },
-      spike: { light: "#a0705a", base: "#6e4234", dark: "#4a2a22", line: "#1c0d0a" },
+      spike: { light: "#c08a70", base: "#8a5442", dark: "#5a3428", line: "#1c0d0a" },
       rim: "#ffb050", dust: ["#c0703a", "#7a3a22"],
-      haze: ["#5a3022", "#4a2618"],
+      haze: ["#603424", "#50291a"],
       weights: { lava: 30, lavaUnder: 22, lone: 16, row: 12 }
     },
     {
@@ -103,7 +112,7 @@
       far: ["#e4bf86", "#f4d8a2"], mid: ["#cf9a5c", "#e8b878"], hill: "#d9b48c",
       floor: ["#d6a75e", "#f2cc84", "#e2b46c", "#c48c48", "#eec27c"],
       glow: { kind: "sun" },
-      rock: { light: "#f0cc96", base: "#c08a52", dark: "#8a5a30", line: "#4a3018" },
+      rock: { light: "#e8a070", base: "#a8603a", dark: "#6a3820", line: "#24100a" },
       rim: "#ffffff", dust: ["#f2d498", "#d6aa66"],
       haze: ["#f4dcae", "#e8c48c"],
       weights: { stone: 30, pebble: 22, stones: 14 }
@@ -113,7 +122,7 @@
       sky: ["#4592dc", "#72b4ec", "#a6d6f6", "#dcf2ff"],
       sea: ["#2a72b2", "#3f8ccc"], far: ["#3c9a4c", "#72d27a"], mid: ["#2e8a3c", "#5ec464"],
       floor: ["#1c5690", "#58aee8", "#2d74b4", "#3a88c8", "#1a4c80"],
-      leaf: { light: "#8ae070", base: "#3fa848", dark: "#2a7a34", line: "#14401c" },
+      leaf: { light: "#9ae878", base: "#46b04c", dark: "#2a7a34", line: "#123a18" },
       glow: { kind: "twinkle" },
       rim: "#ffffff", dust: ["#cfeeff", "#8cc8f0"],
       haze: ["#a6d6f6", "#72b4ec"],
@@ -125,26 +134,28 @@
       trunks: "#6c9a64", far: ["#5f8f55", "#80b06a"], mid: ["#3f6a38", "#5a8a48"], big: ["#3a5232", "#4a663e"],
       canopy: ["#2c5426", "#4a8a3a", "#1c3a18"],
       floor: ["#4a3420", "#5aa040", "#3f8a34", "#5a4028", "#3a2816"],
-      tree: { trunk: "#6a4a2a", bark: "#4a3018", crown: "#3f8a34", light: "#6ac050", dark: "#2a5a24", line: "#16300f" },
+      tree: { trunk: "#7a5430", bark: "#4e321a", root: "#3a2412", crown: "#3c8a32", light: "#74c856",
+        shade: "#2a6424", line: "#122a0c", wood: "#d8aa6a", ring: "#9a6a3a" },
       glow: { kind: "firefly", cols: ["#7aa030", "#e8ff80"] },
       rim: "#ffffff", dust: ["#7a5a38", "#5a4028"],
       haze: ["#a8d29a", "#8cbc7e"],
-      weights: { tree: 26, bush: 18, branch: 16, branchOverBush: 14, trees: 8 }
+      weights: { tree: 22, bush: 14, branch: 12, branchOverBush: 10, stump: 20, stumpRun: 8, trees: 6 }
     },
     {
       key: "ko", name: "KO-KORO", title: "#e8f6ff", look: "snow", cave: false, ground: "solid",
       sky: ["#94bfe6", "#b8d6f0", "#d8eafa", "#f2f8ff"],
       mountains: ["#c2d2e6", "#f4f8ff", "#a8bcd6"], far: ["#dce8f4", "#ffffff"], mid: ["#c4d4e6", "#eef4fc"],
       floor: ["#e2ecf6", "#ffffff", "#f0f6fc", "#c8d4e4", "#d6e0ec"],
-      spike: { light: "#ffffff", base: "#b8e8ff", dark: "#70b0e0", line: "#305070", shine: "#ffffff" },
+      spike: { light: "#ffffff", base: "#9cdcff", dark: "#4a94d0", line: "#1c3c60", shine: "#ffffff" },
       glow: { kind: "snow" },
       rim: "#ffffff", dust: ["#ffffff", "#d6e4f2"],
       haze: ["#e6eef8", "#cfdcec"],
-      weights: { iceTall: 24, iceShort: 18, iceDouble: 18, iceTriple: 12 }
+      weights: { iceTall: 20, iceShort: 16, iceDouble: 16, iceTriple: 10, crack: 16 }
     }
   ];
 
   function placeAt(score) { return Math.floor(score / PLACE_POINTS) % PLACES.length; }
+  function placeByKey(k) { for (const P of PLACES) { if (P.key === k) { return P; } } return PLACES[0]; }
 
   // -- Pixel font (3 x 5) ---------------------------------------------
   const FONT = {
@@ -161,7 +172,8 @@
     "U": "101101101101111", "V": "101101101101010", "W": "101101111111101",
     "X": "101101010101101", "Y": "101101010010010", "Z": "111001010100111",
     "-": "000000111000000", ".": "000000000000010", ":": "000010000010000",
-    "!": "010010010000010", " ": "000000000000000"
+    "!": "010010010000010", " ": "000000000000000", "<": "001010100010001",
+    ">": "100010001010100", "/": "001001010100100"
   };
 
   function textWidth(s, size) { return s.length * 4 * size - size; }
@@ -425,9 +437,7 @@
     return c;
   }
 
-  // -- Obstacles ----------------------------------------------------------
-  // kinds: "up" / "down" (pixel triangles), "box" (stones, trees,
-  // branches: hit as a rectangle), "pit" (lava), "leaf" (Ga-Koro ground).
+  // -- Obstacle art ---------------------------------------------------------
   function makeSpike(w, h, down, seed, C) {
     // A stepped pixel triangle, lit from the left. Ice gets a shine line.
     const [c, x] = canvas(w, h);
@@ -453,7 +463,7 @@
   }
 
   function makeStone(w, h, C) {
-    // A rounded stone, half sunk in the sand.
+    // A rounded stone, half sunk in the sand, with a dark outline.
     const [c, x] = canvas(w, h);
     for (let y = 0; y < h; y++) {
       const dy = (h - y) / h;
@@ -461,60 +471,141 @@
       const a = Math.round(w / 2 - half), b = Math.round(w / 2 + half);
       if (b <= a) { continue; }
       x.fillStyle = C.line; x.fillRect(a, y, b - a, 1);
-      if (b - a > 2 && y > 0) {
+      if (b - a > 3 && y > 0) {
         x.fillStyle = C.base; x.fillRect(a + 1, y, b - a - 2, 1);
         x.fillStyle = C.light; x.fillRect(a + 1, y, Math.max(1, Math.floor((b - a) / 3)), 1);
-        x.fillStyle = C.dark; x.fillRect(b - 1 - Math.max(1, Math.floor((b - a) / 5)), y, Math.max(1, Math.floor((b - a) / 5)), 1);
+        const d = Math.max(1, Math.floor((b - a) / 4));
+        x.fillStyle = C.dark; x.fillRect(b - 1 - d, y, d, 1);
       }
+    }
+    // A crack or two.
+    x.fillStyle = C.line;
+    x.fillRect(Math.round(w * 0.55), Math.round(h * 0.35), 1, 2); x.fillRect(Math.round(w * 0.55) + 1, Math.round(h * 0.35) + 2, 1, 2);
+    return c;
+  }
+
+  function crown(x, cx, cy, r, C) {
+    // A leafy crown: three overlapping blobs, outlined, lit from the top left.
+    const blobs = [[cx - Math.round(r * 0.55), cy + Math.round(r * 0.25), Math.round(r * 0.7)],
+      [cx + Math.round(r * 0.55), cy + Math.round(r * 0.25), Math.round(r * 0.7)], [cx, cy - Math.round(r * 0.2), Math.round(r * 0.8)]];
+    for (const [bx, by, br] of blobs) { disc(x, bx, by, br + 1, C.line); }
+    for (const [bx, by, br] of blobs) { disc(x, bx, by, br, C.shade); }
+    for (const [bx, by, br] of blobs) { disc(x, bx - 1, by - 1, Math.max(1, br - 1), C.crown); }
+    for (const [bx, by, br] of blobs) { disc(x, bx - Math.round(br * 0.35), by - Math.round(br * 0.4), Math.max(1, Math.round(br * 0.35)), C.light); }
+  }
+
+  function makeTree(w, h, C, bush) {
+    // A young tree (trunk with roots and a full crown) or a bush.
+    const [c, x] = canvas(w, h);
+    const r = Math.floor(w / 2) - 1;
+    if (!bush) {
+      const tw = Math.max(4, Math.round(w * 0.28)), tx = Math.round(w / 2 - tw / 2);
+      x.fillStyle = C.root; x.fillRect(tx - 2, h - 2, tw + 4, 2);
+      x.fillStyle = C.bark; x.fillRect(tx - 1, r, tw + 2, h - r);
+      x.fillStyle = C.trunk; x.fillRect(tx, r, tw, h - r - 1);
+      x.fillStyle = C.bark; x.fillRect(tx + Math.floor(tw / 2), r + 4, 1, h - r - 8);
+      crown(x, Math.floor(w / 2), r + 1, r, C);
+    } else {
+      crown(x, Math.floor(w / 2), h - r, r, C);
     }
     return c;
   }
 
-  function makeTree(w, h, C) {
-    // A small tree or bush: trunk and a round crown.
+  function makeStump(w, h, C) {
+    // A cut-down tree: rough bark sides flaring into roots, and a flat
+    // top showing the rings. You can land on it.
     const [c, x] = canvas(w, h);
-    const tw = Math.max(3, Math.round(w * 0.3)), cr = Math.floor(w / 2);
-    const crownY = Math.min(h - cr, cr);
-    x.fillStyle = C.bark; x.fillRect(Math.round(w / 2 - tw / 2) - 1, crownY, tw + 2, h - crownY);
-    x.fillStyle = C.trunk; x.fillRect(Math.round(w / 2 - tw / 2), crownY, tw, h - crownY);
-    disc(x, cr, crownY, cr, C.line);
-    disc(x, cr, crownY, cr - 1, C.crown);
-    disc(x, cr - 2, crownY - 2, Math.max(1, cr - 4), C.light);
-    x.fillStyle = C.dark; x.fillRect(cr + 1, crownY + 2, Math.max(1, cr - 3), 2);
+    const r = rng(w * 31 + h);
+    for (let y = 3; y < h; y++) {
+      // Slightly wavy sides, roots spreading at the bottom.
+      const root = y > h - 5 ? (y - (h - 5)) : 0;
+      const a = Math.max(0, 3 - root + (r() < 0.25 ? 1 : 0)), b = Math.min(w, w - 3 + root - (r() < 0.25 ? 1 : 0));
+      x.fillStyle = C.line; x.fillRect(a, y, b - a, 1);
+      x.fillStyle = C.trunk; x.fillRect(a + 1, y, b - a - 2, 1);
+      x.fillStyle = C.bark; x.fillRect(b - 1 - Math.max(2, Math.floor((b - a) / 4)), y, Math.max(2, Math.floor((b - a) / 4)), 1);
+      x.fillStyle = "#9a7048"; x.fillRect(a + 1, y, 2, 1);
+    }
+    // Bark grooves, not too even.
+    x.fillStyle = C.bark;
+    for (let i = 6; i < w - 7; i += 4 + Math.floor(r() * 3)) {
+      const y0 = 5 + Math.floor(r() * 3), y1 = h - 4 - Math.floor(r() * 3);
+      x.fillRect(i, y0, 1, Math.max(1, y1 - y0));
+    }
+    // The cut top: an oval of pale wood with rings.
+    x.fillStyle = C.line; x.fillRect(4, 0, w - 8, 1); x.fillRect(2, 1, 2, 2); x.fillRect(w - 4, 1, 2, 2);
+    x.fillStyle = C.wood; x.fillRect(4, 1, w - 8, 3); x.fillRect(3, 2, w - 6, 1);
+    x.fillStyle = C.ring; x.fillRect(7, 2, w - 14, 1);
+    x.fillStyle = C.wood; x.fillRect(10, 2, Math.max(1, w - 20), 1);
+    x.fillStyle = C.ring; x.fillRect(Math.round(w / 2) - 1, 2, 2, 1);
+    x.fillStyle = C.line; x.fillRect(3, 4, w - 6, 1);
     return c;
   }
 
   function makeBranch(w, tip, C) {
     // A branch hanging from the canopy with a clump of leaves.
     const [c, x] = canvas(w, tip);
-    const cr = Math.floor(w / 2);
-    x.fillStyle = C.bark; x.fillRect(cr - 1, 0, 3, tip - cr);
-    x.fillStyle = C.trunk; x.fillRect(cr, 0, 1, tip - cr);
-    disc(x, cr, tip - cr - 1, cr, C.line);
-    disc(x, cr, tip - cr - 1, cr - 1, C.crown);
-    disc(x, cr - 2, tip - cr - 3, Math.max(1, cr - 4), C.light);
+    const r = Math.floor(w / 2) - 1;
+    x.fillStyle = C.bark; x.fillRect(r - 1, 0, 3, tip - r);
+    x.fillStyle = C.trunk; x.fillRect(r, 0, 1, tip - r);
+    crown(x, r + 1, tip - r - 1, r, C);
     return c;
   }
 
   function makeLeaf(w, C) {
-    // A big floating leaf, rounded at the ends, with a vein.
-    const h = 7;
+    // A big floating leaf, rounded at the ends, with a vein and a notch.
+    const h = 11;
     const [c, x] = canvas(w, h);
     for (let y = 0; y < h; y++) {
-      const inset = y === 0 ? 4 : y === 1 ? 2 : y === h - 1 ? 3 : y === h - 2 ? 1 : 0;
-      x.fillStyle = y === 0 ? C.line : y === 1 ? C.light : y < h - 2 ? C.base : C.dark;
+      const inset = [5, 3, 2, 1, 0, 0, 0, 0, 1, 2, 4][y];
+      x.fillStyle = y === 0 ? C.line : y <= 2 ? C.light : y < h - 3 ? C.base : C.dark;
       x.fillRect(inset, y, w - inset * 2, 1);
+      x.fillStyle = C.line; x.fillRect(inset, y, 1, 1); x.fillRect(w - inset - 1, y, 1, 1);
     }
-    x.fillStyle = C.line; x.fillRect(0, 2, 1, 3); x.fillRect(w - 1, 2, 1, 3);
-    x.fillStyle = C.dark; x.fillRect(6, 3, w - 12, 1);
+    x.fillStyle = C.line; x.fillRect(5, h - 1, w - 10, 1);
+    x.fillStyle = C.dark; x.fillRect(8, 5, w - 16, 1);
+    x.clearRect(Math.round(w * 0.7), 0, 3, 3);
     return c;
   }
 
+  function makeCrack(w, h, C) {
+    // A big cracked icicle hanging from an ice ledge. Rolling into it on
+    // the ground smashes it.
+    const [c, x] = canvas(w + 8, h);
+    x.fillStyle = C.line; x.fillRect(0, 0, w + 8, 7);
+    x.fillStyle = C.base; x.fillRect(1, 0, w + 6, 6);
+    x.fillStyle = C.light; x.fillRect(1, 0, w + 6, 2);
+    for (let y = 6; y < h; y++) {
+      const t = (y - 6) / (h - 6);
+      const half = (w / 2) * (1 - t * 0.55) - (y > h - 6 ? (y - (h - 6)) * 1.6 : 0);
+      if (half < 1) { continue; }
+      const a = Math.round(4 + w / 2 - half), b = Math.round(4 + w / 2 + half);
+      x.fillStyle = C.line; x.fillRect(a, y, b - a, 1);
+      x.fillStyle = C.base; x.fillRect(a + 1, y, b - a - 2, 1);
+      x.fillStyle = C.light; x.fillRect(a + 1, y, Math.max(1, Math.floor((b - a) / 4)), 1);
+      x.fillStyle = C.dark; x.fillRect(b - 2, y, 1, 1);
+    }
+    // The cracks.
+    x.fillStyle = C.line;
+    let cx = 4 + Math.round(w * 0.4);
+    for (let y = 12; y < h - 10; y += 2) {
+      x.fillRect(cx, y, 1, 2);
+      cx += (y % 6 === 0 ? 1 : -1);
+      if (y % 10 === 0) { x.fillRect(cx + 1, y, 3, 1); }
+    }
+    cx = 4 + Math.round(w * 0.65);
+    for (let y = 30; y < h - 14; y += 2) { x.fillRect(cx, y, 1, 2); cx += (y % 4 === 0 ? -1 : 1); }
+    return c;
+  }
+
+  // -- Obstacles ----------------------------------------------------------
+  // kinds: "up" / "down" (pixel triangles), "box" (stones, trees,
+  // branches: hit as a rectangle), "stump" (land on top, die on the
+  // side), "crack" (smash on the ground, die in the air), "pit" (lava),
+  // "leaf" (Ga-Koro ground).
   function place() { return PLACES[g.place]; }
 
   function up(x, w, h) {
-    const P = place();
-    return { kind: "up", x, w, h, img: makeSpike(w, h, false, (x * 7 + h) | 0, P.spike) };
+    return { kind: "up", x, w, h, img: makeSpike(w, h, false, (x * 7 + h) | 0, place().spike) };
   }
 
   function down(x, w, tip) {
@@ -522,9 +613,9 @@
     return { kind: "down", x, w, h: tip - top, top, img: makeSpike(w, tip - top, true, (x * 3 + tip) | 0, place().spike) };
   }
 
-  function box(x, w, h, top, img) {
+  function box(x, w, h, top, img, kind) {
     // top: y of its top edge (hanging ones start at 0).
-    return { kind: "box", x, w, h, top, img };
+    return { kind: kind || "box", x, w, h, top, img };
   }
 
   function pit(x, w) { return { kind: "pit", x, w, place: g.place }; }
@@ -559,30 +650,91 @@
     return (nx - cx) * (nx - cx) + (ny - cy) * (ny - cy) < r * r;
   }
 
-  // -- Which place is where -----------------------------------------------
+  // -- Which place is where, and what holds you up ---------------------------
   // While changing place, everything right of g.bx is the new place and
   // everything left of it the old one. g.bx moves left with the ground.
   function placeAtX(x) { return PLACES[x >= g.bx ? g.place : g.prev]; }
 
-  function solidAt(x) {
-    // Is there ground under x? Lava pits and open water are not.
+  function hillAt(x) {
+    // Po-Koro's rolling hills: how far the sand rises above the floor at
+    // screen x. Eases in and out over 120 px at the edges of the stage.
+    if (placeAtX(x).key !== "po") { return 0; }
+    let ease = 1;
+    if (g.bx > -1e8) {
+      ease = PLACES[g.place].key === "po" ? (x - g.bx) / 120 : (g.bx - x) / 120;
+      ease = Math.max(0, Math.min(1, ease));
+    }
+    const wx = x + g.scroll;
+    const h = 9 * (0.5 - 0.5 * Math.cos((2 * Math.PI * wx) / 300)) + 3 * (0.5 - 0.5 * Math.cos((2 * Math.PI * wx) / 110));
+    return h * ease;
+  }
+
+  function supportAt(x) {
+    // Height above the floor that holds the ball up at x: a stump's top,
+    // the ground (or a hill), or null over lava or open water.
+    let top = hillAt(x), stump = false;
+    for (const o of g.obstacles) {
+      if (o.kind === "stump" && x > o.x - 3 && x < o.x + o.w + 3) { top = Math.max(top, o.h); stump = true; }
+    }
+    if (stump) { return top; }
     if (placeAtX(x).ground === "water") {
       for (const o of g.obstacles) {
-        if (o.kind === "leaf" && x > o.x + 4 && x < o.x + o.w - 4) { return true; }
+        if (o.kind === "leaf" && x > o.x + 4 && x < o.x + o.w - 4) { return 0; }
       }
-      return false;
+      return null;
     }
     for (const o of g.obstacles) {
-      if (o.kind === "pit" && x > o.x + 6 && x < o.x + o.w - 6) { return false; }
+      if (o.kind === "pit" && x > o.x + 6 && x < o.x + o.w - 6) { return null; }
     }
-    return true;
+    return top;
+  }
+
+  // -- Saved: best score, unlocked colours, colour picked -------------------
+  let save = { best: 0, unlocked: ["onu"], color: "onu" };
+
+  function api() { return window.pywebview && window.pywebview.api; }
+
+  function mergeSave(d) {
+    if (!d) { return; }
+    save.best = Math.max(save.best, parseInt(d.best, 10) || 0);
+    for (const k of d.unlocked || []) { if (save.unlocked.indexOf(k) < 0) { save.unlocked.push(k); } }
+    if (d.color && save.unlocked.indexOf(d.color) >= 0) { save.color = d.color; }
+  }
+
+  function loadSave() {
+    try {
+      mergeSave(JSON.parse(localStorage.getItem("mnrCaveRoll") || "null"));
+      mergeSave({ best: localStorage.getItem("mnrCaveRollBest") });
+    } catch (e) {}
+    const a = api();
+    if (a && a.game_load) { a.game_load().then(mergeSave).catch(() => {}); }
+    else if (a && a.game_get_best) { a.game_get_best().then(mergeSave).catch(() => {}); }
+  }
+
+  function storeSave() {
+    try { localStorage.setItem("mnrCaveRoll", JSON.stringify(save)); } catch (e) {}
+    const a = api();
+    if (a && a.game_save) { a.game_save(save).catch(() => {}); }
+    else if (a && a.game_save_best) { a.game_save_best(save.best).catch(() => {}); }
+  }
+
+  function unlocked() {
+    // In place order.
+    return PLACES.map(P => P.key).filter(k => save.unlocked.indexOf(k) >= 0);
+  }
+
+  function cycleColor(step) {
+    const list = unlocked();
+    const i = Math.max(0, list.indexOf(save.color));
+    save.color = list[(i + step + list.length) % list.length];
+    storeSave();
   }
 
   // -- State --------------------------------------------------------------
   let overlay = null, view = null, ctx = null, sprites = {}, loaded = false;
   let art = [];                      // per place: { back, ledges, top, floor, swarm }
   let running = false, raf = 0, lastTime = 0, acc = 0;
-  let g = null, best = 0, keyHeld = false, clock = 0, swarmSpeed = 0;
+  let g = null, keyHeld = false, clock = 0, swarmSpeed = 0;
 
   function reset(state) {
     g = {
@@ -591,17 +743,19 @@
       rollTicks: 0,          // ticks spent rolling (sets the speed)
       speed: 0,
       scroll: 0,             // how far the world has moved
-      y: 0, vy: 0, air: 0,   // height above the ground (up is +), ticks in the air
+      y: 0, vy: 0, air: 0,   // height above the floor (up is +), ticks since the jump
+      grounded: true,
       angle: 0,
       obstacles: [],
-      untilNext: 260,
+      untilNext: 280,
       leafEnd: 0,            // right end of the last leaf (Ga-Koro)
       score: 0,
       deadTick: 0,
       newBest: false,
       fallInto: "",
-      dust: [], embers: [], snow: [],
-      place: 0, prev: 0, bx: -1e9, mouth: false, banner: 0
+      knock: null,           // knocked out of the ball: { x, y, vx, vy, a }
+      dust: [], embers: [], snow: [], shards: [],
+      place: 0, prev: 0, bx: -1e9, mouth: false, banner: 0, unlockBanner: 0, unlockKey: ""
     };
   }
 
@@ -610,23 +764,25 @@
     for (const group of Object.keys(FRAMES)) {
       for (let i = 1; i <= FRAMES[group]; i++) { names.push(group + "_" + String(i).padStart(2, "0")); }
     }
+    const paths = [];
     for (const P of PLACES) {
-      if (P.key === "le") { continue; }
-      for (let i = 1; i <= FRAMES.b_03; i++) { names.push("b_03_0" + i + "_" + P.key); }
+      for (const n of names) { paths.push((P.key === "le" ? "" : P.key + "/") + n); }
     }
-    let left = names.length;
-    for (const n of names) {
+    let left = paths.length;
+    for (const p of paths) {
       const img = new Image();
       img.onload = img.onerror = () => { if (--left === 0) { loaded = true; done(); } };
-      img.src = "game/sprites/" + n + ".png";
-      sprites[n] = img;
+      img.src = "game/sprites/" + p + ".png";
+      sprites[p] = img;
     }
   }
 
+  function spriteOf(key, name) { return sprites[(key === "le" ? "" : key + "/") + name]; }
+
   function sprite(group, tick) {
-    // Each sprite shows for HOLD ticks.
+    // The player's colour; each sprite shows for HOLD ticks.
     const i = Math.floor(tick / HOLD) % FRAMES[group];
-    return sprites[group + "_" + String(i + 1).padStart(2, "0")];
+    return spriteOf(save.color, group + "_" + String(i + 1).padStart(2, "0"));
   }
 
   function makeArt() {
@@ -638,10 +794,9 @@
         const size = Math.round(64 * L.scale);
         const out = [];
         for (let i = 1; i <= FRAMES.b_03; i++) {
-          const src = sprites["b_03_0" + i + (P.key === "le" ? "" : "_" + P.key)];
           const [c, x] = canvas(size, size);
           x.filter = "saturate(" + L.sat + ")";
-          x.drawImage(src, 0, 0, size, size);
+          x.drawImage(spriteOf(P.key, "b_03_0" + i), 0, 0, size, size);
           x.filter = "none";
           x.globalCompositeOperation = "source-atop";
           x.globalAlpha = L.hazeAmt;
@@ -709,6 +864,11 @@
   }
 
   // -- Play -----------------------------------------------------------------
+  function onSurface() {
+    const s = supportAt(BALL_X);
+    return s !== null && g.y <= s + 0.5 && g.vy <= 0;
+  }
+
   function jumpPressed() {
     if (!g) { return; }
     if (g.state === "idle") { g.state = "hop"; g.tick = 0; return; }
@@ -716,7 +876,7 @@
       if (g.deadTick > 30) { reset("ready"); }
       return;
     }
-    if (g.state === "roll" && g.y <= 0) { g.vy = JUMP_V; g.air = 0; g.y = 0.01; }
+    if (g.state === "roll" && onSurface()) { g.vy = JUMP_V; g.air = 0; g.y += 0.01; g.grounded = false; }
   }
 
   function addLeaf(first) {
@@ -725,9 +885,9 @@
     const hard = Math.min(1, (g.speed - SPEED_START) / (SPEED_MAX - SPEED_START));
     const hopReach = HOP_AIR * g.speed, jumpReach = FULL_AIR * g.speed;
     const gap = first ? 0 : Math.random() < 0.5 ?
-      18 + Math.random() * Math.max(4, hopReach * 0.45 - 18) :
-      hopReach * 0.45 + Math.random() * Math.max(4, jumpReach * 0.55 - hopReach * 0.45);
-    const w = first ? 260 : Math.max(44, (60 + Math.random() * 110) * (1 - hard * 0.35));
+      18 + Math.random() * Math.max(4, hopReach * 0.4 - 18) :
+      hopReach * 0.4 + Math.random() * Math.max(4, jumpReach * 0.5 - hopReach * 0.4);
+    const w = first ? 260 : Math.max(50, (70 + Math.random() * 110) * (1 - hard * 0.3));
     g.obstacles.push(leaf(g.leafEnd + gap, w));
     g.leafEnd += gap + w;
   }
@@ -742,57 +902,75 @@
     const hopReach = HOP_AIR * g.speed, jumpReach = FULL_AIR * g.speed;
     let extra = 0;
     const T = P.tree, push = o => g.obstacles.push(o);
+    const stoneAt = (x, w, h) => {
+      // Sunk 2 px into the sand, on the hill where it lands.
+      const lift = Math.round(Math.min(hillAt(x + 2), hillAt(x + w / 2), hillAt(x + w - 2))) - 2;
+      return box(x, w, h, FLOOR - lift - h, makeStone(w, h, P.rock));
+    };
 
     const PATTERNS = {
-      // Onu-Koro
-      tall: () => push(up(x0, 14 + R(6), 22 + R(12))),
-      short: () => push(up(x0, 10 + R(4), 9 + R(6))),
-      tapUnder: () => { push(up(x0, 10 + R(3), 9 + R(5))); push(down(x0 + 4 + R(10), 12 + R(4), tip())); },
-      lone: () => push(down(x0, 12 + R(6), tip())),
-      double: () => { push(up(x0, 12, 18 + R(6))); push(up(x0 + 22 + R(10), 12, 16 + R(8))); },
+      // Onu-Koro (and Ta-Koro's stalactites).
+      tall: () => push(up(x0, 16 + R(6), 24 + R(10))),
+      short: () => push(up(x0, 14 + R(4), 12 + R(5))),
+      tapUnder: () => { push(up(x0, 14 + R(3), 12 + R(4))); push(down(x0 + 4 + R(10), 16 + R(4), tip())); },
+      lone: () => push(down(x0, 16 + R(6), tip())),
+      double: () => { push(up(x0, 14, 18 + R(6))); push(up(x0 + 24 + R(10), 14, 16 + R(8))); },
       row: () => {
-        const n = 2 + R(2), gap = 26 + R(14);
-        for (let i = 0; i < n; i++) { push(down(x0 + i * gap, 12 + R(5), tip())); }
+        const n = 2 + R(2), gap = 28 + R(14);
+        for (let i = 0; i < n; i++) { push(down(x0 + i * gap, 16 + R(5), tip())); }
         extra = n * gap;
       },
       // Ta-Koro: lava pits, and stalactites over some of them.
       lava: () => {
-        const w = Math.round(Math.max(26, Math.min(jumpReach * 0.55, 30 + Math.random() * jumpReach * 0.4)));
+        const w = Math.round(Math.max(26, Math.min(jumpReach * 0.5, 30 + Math.random() * jumpReach * 0.35)));
         push(pit(x0, w)); extra = w;
       },
       lavaUnder: () => {
-        const w = Math.round(Math.max(24, Math.min(hopReach * 0.5, 28 + Math.random() * hopReach * 0.3)));
-        push(pit(x0, w)); push(down(x0 + Math.round(w / 2) - 7, 14, tip())); extra = w;
+        const w = Math.round(Math.max(24, Math.min(hopReach * 0.45, 28 + Math.random() * hopReach * 0.25)));
+        push(pit(x0, w)); push(down(x0 + Math.round(w / 2) - 8, 16, tip())); extra = w;
       },
       // Po-Koro: stones.
-      stone: () => { const w = 22 + R(12), h = 20 + R(12); push(box(x0, w, h, FLOOR - h, makeStone(w, h, P.rock))); },
-      pebble: () => { const w = 14 + R(6), h = 8 + R(6); push(box(x0, w, h, FLOOR - h, makeStone(w, h, P.rock))); },
+      stone: () => { const w = 26 + R(12), h = 22 + R(10); push(stoneAt(x0, w, h)); },
+      pebble: () => { const w = 18 + R(6), h = 12 + R(4); push(stoneAt(x0, w, h)); },
       stones: () => {
-        const w1 = 16 + R(6), h1 = 12 + R(6), w2 = 18 + R(8), h2 = 16 + R(8);
-        push(box(x0, w1, h1, FLOOR - h1, makeStone(w1, h1, P.rock)));
-        push(box(x0 + w1 + 6 + R(8), w2, h2, FLOOR - h2, makeStone(w2, h2, P.rock)));
+        const w1 = 20 + R(6), h1 = 14 + R(6), w2 = 22 + R(8), h2 = 18 + R(8);
+        push(stoneAt(x0, w1, h1));
+        push(stoneAt(x0 + w1 + 6 + R(8), w2, h2));
       },
-      // Le-Koro: trees, bushes and hanging branches.
-      tree: () => { const w = 14 + R(6), h = 24 + R(10); push(box(x0, w, h, FLOOR - h, makeTree(w, h, T))); },
-      bush: () => { const w = 12 + R(6), h = 9 + R(5); push(box(x0, w, h, FLOOR - h, makeTree(w, h, T))); },
-      branch: () => { const w = 14 + R(6), t = tip(); push(box(x0, w, t, 0, makeBranch(w, t, T))); },
+      // Le-Koro: trees, bushes, hanging branches and stumps.
+      tree: () => { const w = 20 + R(6), h = 26 + R(8); push(box(x0, w, h, FLOOR - h, makeTree(w, h, T, false))); },
+      bush: () => { const w = 18 + R(6), h = 12 + R(4); push(box(x0, w, h, FLOOR - h, makeTree(w, h, T, true))); },
+      branch: () => { const w = 18 + R(6), t = tip(); push(box(x0, w, t, 0, makeBranch(w, t, T))); },
       branchOverBush: () => {
-        const w = 12 + R(4), h = 9 + R(4), bw = 14 + R(4), t = tip();
-        push(box(x0, w, h, FLOOR - h, makeTree(w, h, T)));
+        const w = 18 + R(4), h = 12 + R(3), bw = 18 + R(4), t = tip();
+        push(box(x0, w, h, FLOOR - h, makeTree(w, h, T, true)));
         push(box(x0 + 4 + R(10), bw, t, 0, makeBranch(bw, t, T)));
       },
-      trees: () => {
-        const h1 = 18 + R(6), h2 = 16 + R(8);
-        push(box(x0, 14, h1, FLOOR - h1, makeTree(14, h1, T)));
-        push(box(x0 + 24 + R(10), 14, h2, FLOOR - h2, makeTree(14, h2, T)));
+      stump: () => { const w = 24 + R(10), h = 16 + R(8); push(box(x0, w, h, FLOOR - h, makeStump(w, h, T), "stump")); },
+      stumpRun: () => {
+        // Two stumps: hop from one to the next.
+        const w1 = 24 + R(6), h1 = 14 + R(6), w2 = 24 + R(8), h2 = 18 + R(8), gap = 20 + R(16);
+        push(box(x0, w1, h1, FLOOR - h1, makeStump(w1, h1, T), "stump"));
+        push(box(x0 + w1 + gap, w2, h2, FLOOR - h2, makeStump(w2, h2, T), "stump"));
+        extra = w1 + gap + w2;
       },
-      // Ko-Koro: ice spikes, lots of them.
-      iceTall: () => push(up(x0, 12 + R(6), 22 + R(12))),
-      iceShort: () => push(up(x0, 9 + R(4), 9 + R(6))),
-      iceDouble: () => { push(up(x0, 11, 16 + R(8))); push(up(x0 + 16 + R(8), 11, 18 + R(8))); },
+      trees: () => {
+        const h1 = 22 + R(6), h2 = 20 + R(8);
+        push(box(x0, 20, h1, FLOOR - h1, makeTree(20, h1, T, false)));
+        push(box(x0 + 30 + R(10), 20, h2, FLOOR - h2, makeTree(20, h2, T, false)));
+      },
+      // Ko-Koro: ice spikes, and cracked icicles to smash through.
+      iceTall: () => push(up(x0, 16 + R(6), 24 + R(10))),
+      iceShort: () => push(up(x0, 14 + R(4), 12 + R(5))),
+      iceDouble: () => { push(up(x0, 14, 16 + R(8))); push(up(x0 + 20 + R(8), 14, 18 + R(8))); },
       iceTriple: () => {
-        for (let i = 0; i < 3; i++) { push(up(x0 + i * (14 + R(4)), 10, 10 + R(10))); }
-        extra = 30;
+        for (let i = 0; i < 3; i++) { push(up(x0 + i * (16 + R(4)), 13, 12 + R(10))); }
+        extra = 36;
+      },
+      crack: () => {
+        const w = 26 + R(8), h = FLOOR - 14;
+        const o = box(x0, w + 8, h, 0, makeCrack(w, h, P.spike), "crack");
+        push(o);
       }
     };
 
@@ -809,12 +987,12 @@
       if (pick <= 0) { PATTERNS[k](); break; }
     }
     // Room to land before the next one.
-    g.untilNext = jumpReach + 50 + extra + Math.random() * (150 - 70 * hard);
+    g.untilNext = jumpReach + 70 + extra + Math.random() * (170 - 70 * hard);
   }
 
   function changePlace(to) {
     // The new place comes in from the right edge. Out of or into a cave,
-    // a cave mouth goes by.
+    // a cave mouth goes by. Getting here unlocks its colour.
     const from = g.place;
     if (PLACES[from].ground === "water" && g.leafEnd < W + 40) {
       // A last leaf right up to the shore.
@@ -830,13 +1008,34 @@
       g.leafEnd = g.bx - 6;
       addLeaf(true);
     }
+    const key = PLACES[to].key;
+    if (save.unlocked.indexOf(key) < 0) {
+      save.unlocked.push(key);
+      storeSave();
+      g.unlockKey = key; g.unlockBanner = 200;
+    }
   }
 
-  function die() {
+  function die(how) {
+    // how: "hit" (knocked out of the ball) or "drop" (fell in).
     g.state = "dead";
     g.deadTick = 0;
+    if (how === "hit") {
+      g.knock = { x: BALL_X, y: FLOOR - BALL_R - g.y, vx: -1.4, vy: -5.2, a: 0 };
+    }
     const s = Math.floor(g.score);
-    if (s > best) { best = s; g.newBest = true; saveBest(s); }
+    if (s > save.best) { save.best = s; g.newBest = true; storeSave(); }
+  }
+
+  function shatter(o) {
+    // Ice bits flying everywhere.
+    for (let i = 0; i < 40; i++) {
+      g.shards.push({ x: o.x + Math.random() * o.w, y: 20 + Math.random() * (FLOOR - 40),
+        vx: 1 + Math.random() * 5, vy: -2 - Math.random() * 3, life: 30 + Math.floor(Math.random() * 20),
+        col: Math.random() < 0.5 ? "#ffffff" : "#9cdcff" });
+    }
+    g.obstacles.splice(g.obstacles.indexOf(o), 1);
+    g.score += 25;
   }
 
   function update() {
@@ -847,6 +1046,8 @@
     g.dust = g.dust.filter(d => d.life > 0);
     for (const e of g.embers) { e.x -= g.speed; e.y -= e.vy; e.life--; }
     g.embers = g.embers.filter(e => e.life > 0);
+    for (const s of g.shards) { s.x += s.vx - g.speed; s.y += s.vy; s.vy += 0.25; s.life--; }
+    g.shards = g.shards.filter(s => s.life > 0 && s.y < H);
     // Snow in Ko-Koro.
     for (const f of g.snow) { f.x -= f.vx + g.speed * 0.6; f.y += f.vy; }
     g.snow = g.snow.filter(f => f.y < H && f.x > -4);
@@ -854,6 +1055,7 @@
       g.snow.push({ x: Math.random() * (W + 120), y: -2, vx: 0.3 + Math.random() * 0.6, vy: 0.4 + Math.random() * 0.6 });
     }
     if (g.banner > 0) { g.banner--; }
+    if (g.unlockBanner > 0) { g.unlockBanner--; }
 
     if (g.state === "idle") { return; }
     if (g.state === "ready") {
@@ -868,6 +1070,10 @@
     if (g.state === "dead") {
       g.deadTick++;
       g.speed = g.speed > 0.2 ? g.speed * 0.9 : 0;
+      if (g.knock) {
+        // Tumbling off the screen.
+        g.knock.x += g.knock.vx; g.knock.y += g.knock.vy; g.knock.vy += 0.32; g.knock.a -= 15;
+      }
       return;
     }
 
@@ -896,7 +1102,7 @@
     if (g.state === "fall") {
       g.vy -= GRAVITY;
       g.y += g.vy;
-      if (g.y < -BALL_R * 2 - 10) { die(); }
+      if (g.y < -BALL_R * 2 - 10) { die("drop"); }
       return;
     }
 
@@ -905,24 +1111,28 @@
     if (p !== g.place) { changePlace(p); }
     if (place().ground === "water") { while (g.leafEnd < W + 80) { addLeaf(false); } }
 
-    // Jump: holding the key keeps it floaty, a tap is a short hop.
+    // Moving up and down: in the air unless sitting on something.
+    // Holding the key keeps a jump floaty; a tap is a short hop.
+    // Rolling down a slope it sticks to the ground instead of flying off.
+    const sup = supportAt(BALL_X);
     let dropped = false;
-    if (g.y > 0) {
+    if (g.vy <= 0 && sup !== null && g.y <= sup + (g.grounded ? 8 : 0.5)) {
+      g.y = sup; g.vy = 0; g.grounded = true;
+    } else {
+      g.grounded = false;
       g.y += g.vy;
       g.air++;
       g.vy -= GRAVITY;
       if (keyHeld && g.air <= BOOST_TICKS && g.vy > 0) { g.vy += BOOST; }
-      if (g.y <= 0) {
-        if (solidAt(BALL_X)) { g.y = 0; g.vy = 0; } else { dropped = true; }
-      }
-    } else if (!solidAt(BALL_X)) {
-      dropped = true; g.vy = 0; g.y = 0;
+      const now = supportAt(BALL_X);
+      if (g.vy <= 0 && now !== null && g.y <= now) { g.y = now; g.vy = 0; g.grounded = true; }
+      else if (now === null && g.y <= 0) { dropped = true; }
     }
     if (dropped) {
       g.state = "fall";
       g.fallInto = placeAtX(BALL_X).ground === "water" ? "water" : "pit";
       if (g.fallInto === "water") {
-        for (let i = 0; i < 10; i++) {
+        for (let i = 0; i < 12; i++) {
           g.dust.push({ x: BALL_X - 12 + Math.random() * 24, y: FLOOR + 2, vx: Math.random() * 2 - 1 + g.speed * 0.2,
             vy: 1 + Math.random() * 2, life: 14 + Math.floor(Math.random() * 8), col: "#cfeeff" });
         }
@@ -930,10 +1140,10 @@
       return;
     }
 
-    // Dust kicked up when on the ground.
-    if (g.y <= 0 && g.tick % 2 === 0) {
+    // Dust kicked up when rolling on something.
+    if (onSurface() && g.tick % 2 === 0) {
       const D = placeAtX(BALL_X).dust;
-      g.dust.push({ x: BALL_X - 14 + Math.random() * 6, y: FLOOR - 1, vx: g.speed * 0.35 + Math.random(),
+      g.dust.push({ x: BALL_X - 14 + Math.random() * 6, y: FLOOR - g.y - 1, vx: g.speed * 0.35 + Math.random(),
         vy: 0.4 + Math.random() * 0.8, life: 10 + Math.floor(Math.random() * 8), col: D[0], col2: D[1] });
     }
 
@@ -943,9 +1153,13 @@
     }
 
     const cy = FLOOR - BALL_R - g.y;
-    for (const o of g.obstacles) {
-      if ((o.kind === "up" || o.kind === "down") && circleHitsTriangle(BALL_X, cy, HIT_R, triangle(o))) { die(); break; }
-      if (o.kind === "box" && circleHitsBox(BALL_X, cy, HIT_R, o)) { die(); break; }
+    for (const o of g.obstacles.slice()) {
+      if ((o.kind === "up" || o.kind === "down") && circleHitsTriangle(BALL_X, cy, HIT_R, triangle(o))) { die("hit"); break; }
+      if (o.kind === "box" && circleHitsBox(BALL_X, cy, HIT_R, o)) { die("hit"); break; }
+      if (o.kind === "stump" && g.y < o.h - 4 && circleHitsBox(BALL_X, cy, HIT_R, o)) { die("hit"); break; }
+      if (o.kind === "crack" && circleHitsBox(BALL_X, cy, HIT_R, { x: o.x + 4, w: o.w - 8, top: o.top, h: o.h })) {
+        if (onSurface()) { shatter(o); } else { die("hit"); break; }
+      }
     }
   }
 
@@ -1056,6 +1270,16 @@
     const P = PLACES[pi], A = art[pi];
     if (A.top) { tile(A.top, s, 0); }
     tile(A.floor, s, FLOOR);
+    if (P.key === "po") {
+      // The hills: sand rising over the floor.
+      for (let x = 0; x < W; x++) {
+        const hh = Math.round(hillAt(x));
+        if (hh <= 0) { continue; }
+        ctx.fillStyle = P.floor[0]; ctx.fillRect(x, FLOOR - hh + 1, 1, hh);
+        ctx.fillStyle = P.floor[1]; ctx.fillRect(x, FLOOR - hh, 1, 1);
+        ctx.fillStyle = P.floor[2]; ctx.fillRect(x, FLOOR - hh + 1, 1, 1);
+      }
+    }
     if (P.ground === "water") {
       // Little moving waves on the water.
       for (let x = 0; x < W; x += 1) {
@@ -1112,7 +1336,7 @@
         // Only where the water is.
         const water = PLACES[g.place].ground === "water";
         const x0 = g.bx < -1e8 ? 0 : (water ? g.bx : 0), x1 = g.bx < -1e8 ? W : (water ? W : g.bx);
-        inside(x0, x1, () => ctx.drawImage(o.img, x, FLOOR - 1));
+        inside(x0, x1, () => ctx.drawImage(o.img, x, FLOOR - 2));
       }
       else if (o.kind === "up") { ctx.drawImage(o.img, x, FLOOR - o.h); }
       else { ctx.drawImage(o.img, x, o.top); }
@@ -1149,6 +1373,15 @@
     if (g.state === "idle" || g.state === "ready" || g.state === "hop") {
       const group = g.state === "hop" ? "b_02" : "b_01";
       ctx.drawImage(sprite(group, g.tick), Math.round(BALL_X - CENTRE_X[group]), FLOOR - BOTTOM[group]);
+    } else if (g.knock) {
+      // Knocked out of his ball, tumbling away.
+      if (g.knock.y < H + 50) {
+        ctx.save();
+        ctx.translate(Math.round(g.knock.x), Math.round(g.knock.y));
+        ctx.rotate((g.knock.a * Math.PI) / 180);
+        ctx.drawImage(sprite("b_01", 0), -32, -34);
+        ctx.restore();
+      }
     } else {
       const img = sprite("b_03", g.state === "dead" ? 0 : g.tick);
       const cy = Math.round(FLOOR - BALL_R - g.y);
@@ -1170,23 +1403,36 @@
       ctx.restore();
     }
 
+    for (const sh of g.shards) { ctx.fillStyle = sh.col; ctx.fillRect(Math.round(sh.x), Math.round(sh.y), 2, 2); }
     for (const f of g.snow) { ctx.fillStyle = "#ffffff"; ctx.fillRect(Math.round(f.x), Math.round(f.y), 1, 1); }
 
-    // Score, speed and the name of a new place.
-    drawText(ctx, "HI " + pad(best) + "  " + pad(g.score), W - textWidth("HI 00000  00000", 1) - 6, 4, "#f0ecf6", 1);
+    // Score, speed, the name of a new place, and colours.
+    drawText(ctx, "HI " + pad(save.best) + "  " + pad(g.score), W - textWidth("HI 00000  00000", 1) - 6, 4, "#f0ecf6", 1);
     if (g.speed > 0) { drawText(ctx, "SPEED " + g.speed.toFixed(1), 6, 4, "#d0cad8", 1); }
     if (g.banner > 0 && Math.floor(g.banner / 8) % 2 === 0 && g.state !== "dead") {
       drawTextCentred(ctx, place().name, 30, place().title, 2);
     }
+    if (g.unlockBanner > 0 && g.state !== "dead") {
+      drawTextCentred(ctx, "NEW COLOUR UNLOCKED: " + placeByKey(g.unlockKey).name, 46, placeByKey(g.unlockKey).title, 1);
+    }
 
+    const colourLine = () => {
+      const list = unlocked();
+      if (list.length > 1) {
+        drawTextCentred(ctx, "< " + placeByKey(save.color).name + " >  " + list.length + "/" + PLACES.length, 74,
+          placeByKey(save.color).title, 1);
+        drawTextCentred(ctx, "LEFT / RIGHT: COLOUR", 82, "#c8c2d2", 1);
+      }
+    };
     if (g.state === "idle") {
       drawTextCentred(ctx, "CAVE ROLL", 34, "#7ee0a0", 2);
-      if (Math.floor(g.tick / 30) % 2 === 0) { drawTextCentred(ctx, "PRESS SPACE", 52, "#e8e4ee", 1); }
-      drawTextCentred(ctx, "TAP TO HOP - HOLD TO JUMP", 62, "#a8a0b4", 1);
+      if (Math.floor(g.tick / 30) % 2 === 0) { drawTextCentred(ctx, "PRESS SPACE", 52, "#f0ecf6", 1); }
+      drawTextCentred(ctx, "TAP TO HOP - HOLD TO JUMP", 62, "#c8c2d2", 1);
+      colourLine();
     } else if (g.state === "dead") {
-      drawTextCentred(ctx, "GAME OVER", 38, "#ff8a8a", 2);
-      if (g.newBest) { drawTextCentred(ctx, "NEW BEST!", 56, "#ffd27e", 1); }
-      if (g.deadTick > 30) { drawTextCentred(ctx, "SPACE TO GO AGAIN", 66, "#e8e4ee", 1); }
+      drawTextCentred(ctx, "GAME OVER", 34, "#ff8a8a", 2);
+      if (g.newBest) { drawTextCentred(ctx, "NEW BEST!", 52, "#ffd27e", 1); }
+      if (g.deadTick > 30) { drawTextCentred(ctx, "SPACE TO GO AGAIN", 62, "#f0ecf6", 1); colourLine(); }
     }
   }
 
@@ -1198,23 +1444,6 @@
     while (acc >= TICK_MS) { update(); acc -= TICK_MS; }
     render();
     raf = requestAnimationFrame(frame);
-  }
-
-  // -- Best score (MNR Launcher's state.json, else this browser) ------------
-  function api() { return window.pywebview && window.pywebview.api; }
-
-  function loadBest() {
-    try { best = parseInt(localStorage.getItem("mnrCaveRollBest") || "0", 10) || 0; } catch (e) { best = 0; }
-    const a = api();
-    if (a && a.game_get_best) {
-      a.game_get_best().then(r => { if (r && r.best > best) { best = r.best; } }).catch(() => {});
-    }
-  }
-
-  function saveBest(s) {
-    try { localStorage.setItem("mnrCaveRollBest", String(s)); } catch (e) {}
-    const a = api();
-    if (a && a.game_save_best) { a.game_save_best(s).catch(() => {}); }
   }
 
   // -- Window -------------------------------------------------------------------
@@ -1235,7 +1464,7 @@
     view.style.cssText = "image-rendering:pixelated;image-rendering:crisp-edges;" +
       "border:2px solid #35363b;border-radius:4px;cursor:pointer;background:#15141b";
     const hint = document.createElement("div");
-    hint.textContent = "Space / Up / click to jump  ·  Esc to close";
+    hint.textContent = "Space / Up / click to jump  ·  Left / Right to change colour  ·  Esc to close";
     hint.style.cssText = "margin-top:10px;font-size:11px;color:#8b8d93";
     const close = document.createElement("button");
     close.textContent = "×";
@@ -1258,7 +1487,7 @@
     if (!overlay) { build(); }
     overlay.style.display = "flex";
     fit();
-    loadBest();
+    loadSave();
     const go = () => {
       if (!art.length) { makeArt(); }
       reset("idle");
@@ -1290,6 +1519,11 @@
       e.preventDefault();
       if (!e.repeat) { keyHeld = true; jumpPressed(); }
     }
+    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && g &&
+        (g.state === "idle" || (g.state === "dead" && g.deadTick > 30))) {
+      e.preventDefault();
+      cycleColor(e.key === "ArrowLeft" ? -1 : 1);
+    }
     e.stopPropagation();
   }, true);
 
@@ -1309,4 +1543,5 @@
   }
 
   window.mnrCaveRoll = { show, hide };
+  if (window.__caveRollTest) { window.__caveRollTest({ PLACES, makeStump, makeTree, makeBranch, makeStone, makeCrack, makeLeaf, makeSpike }); }
 })();
