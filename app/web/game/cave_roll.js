@@ -1,4 +1,4 @@
-/* Cave Roll - the MNR Launcher's hidden game.
+/* Unleash the Swarm - the MNR Launcher's hidden game (cave_roll.js).
 
    Opened from the Debug panel: "Open Bohrok Canister" > Open (tick
    Debug at the top of the launcher). Esc closes it.
@@ -136,12 +136,14 @@
       trunks: "#6c9a64", far: ["#5f8f55", "#80b06a"], mid: ["#3f6a38", "#5a8a48"], big: ["#3a5232", "#4a663e"],
       canopy: ["#2c5426", "#4a8a3a", "#1c3a18"],
       floor: ["#4a3420", "#5aa040", "#3f8a34", "#5a4028", "#3a2816"],
+      wood: { hi: "#a07a50", light: "#7e5a36", mid: "#5c3e24", dark: "#3e2814", line: "#1c1008",
+        moss: "#5a8c34", mossHi: "#8cbc52", face: "#d4a86a", faceDark: "#b88a50", ring: "#9a6a38", pith: "#6a401e" },
       tree: { trunk: "#7a5430", bark: "#4e321a", root: "#3a2412", crown: "#3c8a32", light: "#74c856",
         shade: "#2a6424", line: "#122a0c", wood: "#d8aa6a", ring: "#9a6a3a" },
       glow: { kind: "firefly", cols: ["#7aa030", "#e8ff80"] },
       rim: "#ffffff", dust: ["#7a5a38", "#5a4028"],
       haze: ["#a8d29a", "#8cbc7e"],
-      weights: { tree: 22, bush: 14, branch: 12, branchOverBush: 10, stump: 20, stumpRun: 8, trees: 6 }
+      weights: { logStep: 34, log: 16, stump: 18, stumpRun: 10, branch: 10 }
     },
     {
       key: "ko", name: "KO-KORO", title: "#e8f6ff", look: "snow", cave: false, ground: "solid",
@@ -288,11 +290,18 @@
       }
     } else if (P.look === "forest") {
       sky(x, TILE, H, P.sky);
-      for (let i = 0; i < 30; i++) {
-        const tx = Math.floor(r() * TILE), tw = 5 + Math.floor(r() * 10);
-        x.fillStyle = P.trunks;
-        for (const dx of [-TILE, 0, TILE]) { x.fillRect(tx + dx, 0, tw, H); }
+      // Far trunks in two depths, with soft shafts of light between.
+      for (let i = 0; i < 46; i++) {
+        const tx = Math.floor(r() * TILE), tw = 4 + Math.floor(r() * 12);
+        x.fillStyle = i < 26 ? "#8ab47e" : P.trunks;
+        for (const dx of [-TILE, 0, TILE]) { x.fillRect(tx + dx, 0, tw, H); x.fillStyle = "#5c8a54"; x.fillRect(tx + dx + tw - 1, 0, 1, H); x.fillStyle = i < 26 ? "#8ab47e" : P.trunks; }
       }
+      x.globalAlpha = 0.16; x.fillStyle = "#f4ffd8";
+      for (let i = 0; i < 7; i++) {
+        const sx = Math.floor(r() * TILE), sw = 8 + Math.floor(r() * 14);
+        for (let y = 0; y < H; y++) { x.fillRect(sx + Math.round(y * 0.45), y, sw, 1); x.fillRect(sx + Math.round(y * 0.45) - TILE, y, sw, 1); }
+      }
+      x.globalAlpha = 1;
     } else if (P.look === "snow") {
       sky(x, TILE, H, P.sky);
       for (let px = 0; px < TILE; px++) {
@@ -328,9 +337,23 @@
             x.fillStyle = P.big[1]; x.fillRect(a, y + 6, Math.max(1, Math.floor(w / 5)), 1);
           });
         } else {
-          const tw = 14 + Math.floor(r() * 10);
+          const tw = 18 + Math.floor(r() * 14);
           x.fillStyle = P.big[0]; x.fillRect(sx, 0, tw, H);
-          x.fillStyle = P.big[1]; x.fillRect(sx, 0, 2, H);
+          x.fillStyle = P.big[1]; x.fillRect(sx, 0, 3, H);
+          x.fillStyle = "#2e4428"; x.fillRect(sx + tw - 3, 0, 3, H);
+        }
+      }
+    }
+    if (P.look === "forest") {
+      // Vines hanging from the canopy, with leaves.
+      const r = rng(L.seed * 3);
+      const n = L.name === "mid" ? 40 : 26, vine = L.name === "mid" ? "#2c5224" : "#4e7a44", leafC = L.name === "mid" ? "#4a8a3a" : "#6a9e5a";
+      for (let i = 0; i < n; i++) {
+        const vx = Math.floor(r() * TILE), len = 20 + Math.floor(r() * (L.name === "mid" ? 70 : 45)), ph = r() * 6;
+        for (let y = 0; y < len; y++) {
+          const px = vx + Math.round(Math.sin(y / 7 + ph) * 1.5);
+          x.fillStyle = vine; x.fillRect(px, y, 1, 1);
+          if (y % 5 === 2) { x.fillStyle = leafC; x.fillRect(px + (y % 10 === 2 ? 1 : -2), y, 2, 1); }
         }
       }
     }
@@ -345,6 +368,15 @@
       } else {
         x.fillStyle = col[0]; x.fillRect(px, gy, 1, H - gy);
         x.fillStyle = col[1]; x.fillRect(px, gy, 1, 1);
+      }
+    }
+    if (P.look === "forest") {
+      // Ferns along the ledge.
+      const r = rng(L.seed * 5);
+      for (let i = 0; i < 60; i++) {
+        const fx = Math.floor(r() * TILE), gy = groundY(L, fx), sz = 3 + Math.floor(r() * 4);
+        x.fillStyle = L.name === "mid" ? "#4f8a3c" : "#7aa868";
+        for (let k = 0; k < sz; k++) { x.fillRect(fx - k, gy - sz + k, 1, 1); x.fillRect(fx + k, gy - sz + k, 1, 1); x.fillRect(fx, gy - sz + k, 1, 1); }
       }
     }
     return c;
@@ -377,6 +409,12 @@
       for (let i = 0; i < 220; i++) {
         x.fillStyle = P.canopy[1];
         x.fillRect(Math.floor(r() * TILE), Math.floor(r() * (CEIL + 2)), 2, 1);
+      }
+      for (let i = 0; i < 30; i++) {
+        const vx = Math.floor(r() * TILE), len = 6 + Math.floor(r() * 14);
+        for (let y = CEIL; y < CEIL + len && y < 34; y++) {
+          x.fillStyle = "#1e3a18"; x.fillRect(vx + (y % 6 < 3 ? 0 : 1), y, 1, 1);
+        }
       }
     }
     return c;
@@ -463,58 +501,106 @@
     }
   }
 
-  function makeTree(w, h, C, bush) {
-    // A young tree (trunk with roots, a stub of branch and a big crown)
-    // or a bush.
-    const [c, x] = canvas(w, h);
-    if (!bush) {
-      const r = Math.min(Math.floor(w / 2) - 1, Math.round(h * 0.31));
-      const tw = Math.max(5, Math.round(w * 0.22)), tx = Math.round(w / 2 - tw / 2), cy = r + 1;
-      x.fillStyle = C.root; x.fillRect(tx - 3, h - 2, tw + 6, 2); x.fillRect(tx - 1, h - 4, tw + 2, 2);
-      x.fillStyle = C.line; x.fillRect(tx - 1, cy, tw + 2, h - cy - 2);
-      x.fillStyle = C.trunk; x.fillRect(tx, cy, tw, h - cy - 2);
-      x.fillStyle = C.bark; x.fillRect(tx + tw - 2, cy, 2, h - cy - 2);
-      x.fillStyle = "#9a7048"; x.fillRect(tx, cy, 1, h - cy - 2);
-      x.fillStyle = C.bark;
-      for (let y = cy + 4; y < h - 4; y += 5) { x.fillRect(tx + 2, y, 1, 2); }
-      // A stub of branch.
-      x.fillStyle = C.line; x.fillRect(tx + tw, cy + r - 2, 4, 3);
-      x.fillStyle = C.trunk; x.fillRect(tx + tw, cy + r - 1, 3, 1);
-      crown(x, Math.floor(w / 2), cy, r, C, w * 7 + h);
-    } else {
-      const r = Math.min(Math.floor(w / 2) - 1, h - 2);
-      crown(x, Math.floor(w / 2), h - Math.round(r * 0.75) - 1, r, C, w * 5 + h);
+  function barkColumn(t, C) {
+    // Round trunk shading across its width: lit left, dark right.
+    return t < 0.12 ? C.light : t < 0.3 ? C.hi : t < 0.62 ? C.light : t < 0.85 ? C.mid : C.dark;
+  }
+
+  function makeGiantStump(w, h, C) {
+    // A giant cut-down tree: deep bark fissures, moss, roots spreading
+    // into the ground, and a cut face with growth rings on top.
+    const pad = 6, cw = w + pad * 2;
+    const [c, x] = canvas(cw, h);
+    const r = rng(w * 13 + h * 7);
+    const faceH = Math.max(4, Math.round(w * 0.16));
+    for (let y = Math.floor(faceH / 2); y < h; y++) {
+      const fromBottom = h - 1 - y;
+      const spread = fromBottom < 9 ? Math.round(Math.pow(9 - fromBottom, 1.35) * 0.55) : 0;
+      const a = pad - spread, b = pad + w + spread;
+      for (let px = a; px < b; px++) {
+        const t = (px - a) / Math.max(1, b - a - 1);
+        x.fillStyle = barkColumn(t, C); x.fillRect(px, y, 1, 1);
+      }
+      x.fillStyle = C.line; x.fillRect(a, y, 1, 1); x.fillRect(b - 1, y, 1, 1);
     }
+    // Fissures running up the bark, broken here and there.
+    for (let fx = pad + 3; fx < pad + w - 2; fx += 3 + Math.floor(r() * 3)) {
+      let y = faceH + Math.floor(r() * 6);
+      while (y < h - 3) {
+        const len = 4 + Math.floor(r() * 10);
+        x.fillStyle = C.dark; x.fillRect(fx, y, 1, Math.min(len, h - 3 - y));
+        x.fillStyle = C.line; if (r() < 0.5) { x.fillRect(fx, y + 1, 1, Math.max(1, Math.min(len - 2, h - 4 - y))); }
+        y += len + 2 + Math.floor(r() * 4);
+      }
+    }
+    // Moss on the shady side and near the roots.
+    for (let i = 0; i < w; i++) {
+      const mx = pad + Math.floor(w * (0.55 + r() * 0.45)) - 1, my = faceH + Math.floor(r() * (h - faceH));
+      x.fillStyle = r() < 0.6 ? C.moss : C.mossHi; x.fillRect(mx, my, 1 + Math.floor(r() * 2), 1);
+    }
+    for (let i = 0; i < w / 2; i++) {
+      x.fillStyle = r() < 0.5 ? C.moss : C.mossHi;
+      x.fillRect(Math.floor(r() * cw), h - 1 - Math.floor(r() * 5), 2, 1);
+    }
+    // The cut face: an oval of pale wood with rings and a crack.
+    const cx = pad + w / 2, rx = w / 2, ry = faceH / 2;
+    for (let y = 0; y < faceH + 1; y++) {
+      const dy = (y - ry) / (ry + 0.5);
+      const half = rx * Math.sqrt(Math.max(0, 1 - dy * dy));
+      const a = Math.round(cx - half), b = Math.round(cx + half);
+      x.fillStyle = C.line; x.fillRect(a, y, b - a, 1);
+      x.fillStyle = C.face; x.fillRect(a + 1, y, Math.max(0, b - a - 2), 1);
+      x.fillStyle = C.faceDark; x.fillRect(Math.round(cx + half * 0.3), y, Math.max(0, Math.round(half * 0.6) - 1), 1);
+    }
+    x.fillStyle = C.ring;
+    for (const f of [0.75, 0.5, 0.28]) {
+      const hw = Math.round(rx * f);
+      x.fillRect(Math.round(cx - hw), Math.round(ry), 1, 1); x.fillRect(Math.round(cx + hw), Math.round(ry), 1, 1);
+      x.fillRect(Math.round(cx - hw * 0.7), Math.max(1, Math.round(ry - ry * f)), Math.round(hw * 1.4), 1);
+    }
+    x.fillStyle = C.pith; x.fillRect(Math.round(cx), Math.round(ry), 1, 1);
+    x.fillStyle = C.dark; x.fillRect(Math.round(cx) + 1, Math.round(ry) + 1, Math.round(rx * 0.5), 1);
     return c;
   }
 
-  function makeStump(w, h, C) {
-    // A cut-down tree: rough bark sides flaring into roots, and a flat
-    // top showing the rings. You can land on it.
+  function makeLog(w, h, C) {
+    // A fallen trunk lying on the ground: round shading top to bottom,
+    // bark lines along it, moss on top, the cut end facing you.
     const [c, x] = canvas(w, h);
-    const r = rng(w * 31 + h);
-    for (let y = 3; y < h; y++) {
-      // Slightly wavy sides, roots spreading at the bottom.
-      const root = y > h - 5 ? (y - (h - 5)) : 0;
-      const a = Math.max(0, 3 - root + (r() < 0.25 ? 1 : 0)), b = Math.min(w, w - 3 + root - (r() < 0.25 ? 1 : 0));
-      x.fillStyle = C.line; x.fillRect(a, y, b - a, 1);
-      x.fillStyle = C.trunk; x.fillRect(a + 1, y, b - a - 2, 1);
-      x.fillStyle = C.bark; x.fillRect(b - 1 - Math.max(2, Math.floor((b - a) / 4)), y, Math.max(2, Math.floor((b - a) / 4)), 1);
-      x.fillStyle = "#9a7048"; x.fillRect(a + 1, y, 2, 1);
+    const r = rng(w * 17 + h);
+    const ew = Math.max(6, Math.round(h * 0.45));
+    for (let y = 0; y < h; y++) {
+      const t = y / (h - 1);
+      x.fillStyle = t < 0.08 ? C.line : t < 0.25 ? C.hi : t < 0.55 ? C.light : t < 0.8 ? C.mid : t < 0.95 ? C.dark : C.line;
+      const inset = y === 0 || y === h - 1 ? 2 : y === 1 || y === h - 2 ? 1 : 0;
+      x.fillRect(ew / 2 + inset, y, w - ew / 2 - inset, 1);
     }
-    // Bark grooves, not too even.
-    x.fillStyle = C.bark;
-    for (let i = 6; i < w - 7; i += 4 + Math.floor(r() * 3)) {
-      const y0 = 5 + Math.floor(r() * 3), y1 = h - 4 - Math.floor(r() * 3);
-      x.fillRect(i, y0, 1, Math.max(1, y1 - y0));
+    for (let i = 0; i < w / 3; i++) {
+      const ly = 2 + Math.floor(r() * (h - 4)), lx = ew + Math.floor(r() * (w - ew - 6));
+      x.fillStyle = r() < 0.6 ? C.dark : C.line; x.fillRect(lx, ly, 3 + Math.floor(r() * 8), 1);
     }
-    // The cut top: an oval of pale wood with rings.
-    x.fillStyle = C.line; x.fillRect(4, 0, w - 8, 1); x.fillRect(2, 1, 2, 2); x.fillRect(w - 4, 1, 2, 2);
-    x.fillStyle = C.wood; x.fillRect(4, 1, w - 8, 3); x.fillRect(3, 2, w - 6, 1);
-    x.fillStyle = C.ring; x.fillRect(7, 2, w - 14, 1);
-    x.fillStyle = C.wood; x.fillRect(10, 2, Math.max(1, w - 20), 1);
-    x.fillStyle = C.ring; x.fillRect(Math.round(w / 2) - 1, 2, 2, 1);
-    x.fillStyle = C.line; x.fillRect(3, 4, w - 6, 1);
+    for (let i = 0; i < w / 3; i++) {
+      x.fillStyle = r() < 0.6 ? C.moss : C.mossHi;
+      x.fillRect(ew + Math.floor(r() * (w - ew - 3)), 1 + Math.floor(r() * 3), 2 + Math.floor(r() * 3), 1);
+    }
+    // Rough broken far end.
+    for (let y = 1; y < h - 1; y++) {
+      x.clearRect(w - 1 - Math.floor(r() * 3), y, 3, 1);
+      x.fillStyle = C.line; x.fillRect(w - 3 - Math.floor(r() * 2), y, 1, 1);
+    }
+    // Cut end: an upright oval with rings.
+    const cx = ew / 2, cy = (h - 1) / 2;
+    for (let y = 0; y < h; y++) {
+      const dy = (y - cy) / (cy + 0.5);
+      const half = (ew / 2) * Math.sqrt(Math.max(0, 1 - dy * dy));
+      const a = Math.round(cx - half), b = Math.round(cx + half);
+      x.fillStyle = C.line; x.fillRect(a, y, Math.max(1, b - a), 1);
+      x.fillStyle = C.face; x.fillRect(a + 1, y, Math.max(0, b - a - 2), 1);
+    }
+    x.fillStyle = C.ring;
+    x.fillRect(Math.round(cx) - 1, Math.round(cy - h * 0.25), 1, Math.round(h * 0.5));
+    x.fillRect(Math.round(cx) + 1, Math.round(cy - h * 0.3), 1, Math.round(h * 0.6));
+    x.fillStyle = C.pith; x.fillRect(Math.round(cx), Math.round(cy), 1, 1);
     return c;
   }
 
@@ -598,7 +684,14 @@
 
   function pit(x, w) { return { kind: "pit", x, w, place: g.place }; }
 
-  function leaf(x, w) { return { kind: "leaf", x, w, img: makeLeaf(Math.round(w), PLACES[3].leaf) }; }
+  function leaf(x, w) {
+    return { kind: "leaf", x, w, ph: Math.random() * 6.28, img: makeLeaf(Math.round(w), PLACES[3].leaf) };
+  }
+
+  function bob(o) {
+    // A leaf riding the waves: 0 to 4 px up.
+    return 2 + 2 * Math.sin(clock * 0.06 + o.ph);
+  }
 
   function triangle(o) {
     if (o.kind === "up") { return [[o.x, FLOOR], [o.x + o.w, FLOOR], [o.x + o.w / 2, FLOOR - o.h]]; }
@@ -657,7 +750,7 @@
     if (stump) { return top; }
     if (placeAtX(x).ground === "water") {
       for (const o of g.obstacles) {
-        if (o.kind === "leaf" && x > o.x + 4 && x < o.x + o.w - 4) { return 0; }
+        if (o.kind === "leaf" && x > o.x + 4 && x < o.x + o.w - 4) { return bob(o); }
       }
       return null;
     }
@@ -863,10 +956,11 @@
     // big ones a full jump.
     const hard = Math.min(1, (g.speed - SPEED_START) / (SPEED_MAX - SPEED_START));
     const hopReach = HOP_AIR * g.speed, jumpReach = FULL_AIR * g.speed;
-    const gap = first ? 0 : Math.random() < 0.5 ?
-      18 + Math.random() * Math.max(4, hopReach * 0.4 - 18) :
-      hopReach * 0.4 + Math.random() * Math.max(4, jumpReach * 0.5 - hopReach * 0.4);
-    const w = first ? 260 : Math.max(50, (70 + Math.random() * 110) * (1 - hard * 0.3));
+    // Long leaves, mostly short gaps: lots of jumping, but forgiving.
+    const gap = first ? 0 : Math.random() < 0.6 ?
+      16 + Math.random() * Math.max(4, hopReach * 0.3 - 16) :
+      hopReach * 0.3 + Math.random() * Math.max(4, jumpReach * 0.38 - hopReach * 0.3);
+    const w = first ? 300 : Math.max(90, (120 + Math.random() * 110) * (1 - hard * 0.25));
     g.obstacles.push(leaf(g.leafEnd + gap, w));
     g.leafEnd += gap + w;
   }
@@ -881,6 +975,13 @@
     const hopReach = HOP_AIR * g.speed, jumpReach = FULL_AIR * g.speed;
     let extra = 0;
     const T = P.tree, push = o => g.obstacles.push(o);
+    const cutTree = (x, w, h, kind) => {
+      // Land on top; roll into the side and it hurts.
+      const img = kind === "log" ? makeLog(w, h, P.wood) : makeGiantStump(w, h, P.wood);
+      const o = box(x, w, h, FLOOR - h, img, "stump");
+      o.drawX = kind === "log" ? 0 : -6;  // stumps' roots spread past the box
+      return o;
+    };
     const stoneAt = (x, w, h) => {
       // Sunk 2 px into the sand, on the hill where it lands.
       const lift = Math.round(Math.min(hillAt(x + 2), hillAt(x + w / 2), hillAt(x + w - 2))) - 2;
@@ -916,28 +1017,29 @@
         push(stoneAt(x0, w1, h1));
         push(stoneAt(x0 + w1 + 6 + R(8), w2, h2));
       },
-      // Le-Koro: trees, bushes, hanging branches and stumps.
-      tree: () => { const w = 26 + R(8), h = 32 + R(8); push(box(x0, w, h, FLOOR - h, makeTree(w, h, T, false))); },
-      bush: () => { const w = 24 + R(6), h = 14 + R(4); push(box(x0, w, h, FLOOR - h, makeTree(w, h, T, true))); },
-      branch: () => { const w = 22 + R(6), t = tip(); push(box(x0, w, t, 0, makeBranch(w, t, T))); },
-      branchOverBush: () => {
-        const w = 22 + R(4), h = 14 + R(2), bw = 22 + R(4), t = tip();
-        push(box(x0, w, h, FLOOR - h, makeTree(w, h, T, true)));
-        push(box(x0 + 4 + R(10), bw, t, 0, makeBranch(bw, t, T)));
+      // Le-Koro: giant cut-down trees. The gimmick: hop onto a fallen
+      // log or a low stump, then jump from it over a giant stump too tall
+      // to clear from the ground (you can land on any of them).
+      logStep: () => {
+        let first;
+        if (Math.random() < 0.6) { const w = 44 + R(22), h = 16 + R(6); first = cutTree(x0, w, h, "log"); }
+        else { const w = 28 + R(6), h = 18 + R(6); first = cutTree(x0, w, h, "stump"); }
+        push(first);
+        const gap = Math.max(26, Math.round(g.speed * 7) + R(20));
+        const gw = 40 + R(14), gh = 52 + R(6);
+        push(cutTree(x0 + first.w + gap, gw, gh, "giant"));
+        extra = first.w + gap + gw;
       },
-      stump: () => { const w = 24 + R(10), h = 16 + R(8); push(box(x0, w, h, FLOOR - h, makeStump(w, h, T), "stump")); },
+      log: () => { const w = 50 + R(30), h = 16 + R(6); push(cutTree(x0, w, h, "log")); extra = w; },
+      stump: () => { const w = 30 + R(10), h = 22 + R(8); push(cutTree(x0, w, h, "stump")); },
       stumpRun: () => {
         // Two stumps: hop from one to the next.
-        const w1 = 24 + R(6), h1 = 14 + R(6), w2 = 24 + R(8), h2 = 18 + R(8), gap = 20 + R(16);
-        push(box(x0, w1, h1, FLOOR - h1, makeStump(w1, h1, T), "stump"));
-        push(box(x0 + w1 + gap, w2, h2, FLOOR - h2, makeStump(w2, h2, T), "stump"));
+        const w1 = 28 + R(6), h1 = 18 + R(6), w2 = 30 + R(8), h2 = 24 + R(8), gap = 22 + R(16);
+        push(cutTree(x0, w1, h1, "stump"));
+        push(cutTree(x0 + w1 + gap, w2, h2, "stump"));
         extra = w1 + gap + w2;
       },
-      trees: () => {
-        const h1 = 28 + R(6), h2 = 26 + R(8);
-        push(box(x0, 26, h1, FLOOR - h1, makeTree(26, h1, T, false)));
-        push(box(x0 + 40 + R(10), 26, h2, FLOOR - h2, makeTree(26, h2, T, false)));
-      },
+      branch: () => { const w = 22 + R(6), t = tip(); push(box(x0, w, t, 0, makeBranch(w, t, T))); },
       // Ko-Koro: ice spikes, and cracked icicles to smash through.
       iceTall: () => push(up(x0, 16 + R(6), 24 + R(10))),
       iceShort: () => push(up(x0, 14 + R(4), 12 + R(5))),
@@ -1032,6 +1134,7 @@
     if (g.lives > 1) {
       g.lives--;
       g.invuln = SAFE_TICKS;
+      g.rollTicks = 0;               // back to the starting speed
       if (o.kind === "crack") { shatter(o); } else { burst(o); }
       return false;
     }
@@ -1118,7 +1221,7 @@
       if (g.y < -14 && (g.lives > 1 || g.invuln > 0)) {
         // Bounce back out, flashing white (a life gone, unless still
         // flashing from the last one).
-        if (g.invuln <= 0) { g.lives--; g.invuln = SAFE_TICKS; }
+        if (g.invuln <= 0) { g.lives--; g.invuln = SAFE_TICKS; g.rollTicks = 0; }
         g.state = "roll"; g.vy = 6.8; g.air = BOOST_TICKS; g.grounded = false;
         const hot = g.fallInto !== "water";
         for (let i = 0; i < 16; i++) {
@@ -1364,10 +1467,10 @@
         // Only where the water is.
         const water = PLACES[g.place].ground === "water";
         const x0 = g.bx < -1e8 ? 0 : (water ? g.bx : 0), x1 = g.bx < -1e8 ? W : (water ? W : g.bx);
-        inside(x0, x1, () => ctx.drawImage(o.img, x, FLOOR - 2));
+        inside(x0, x1, () => ctx.drawImage(o.img, x, Math.round(FLOOR - 2 - bob(o))));
       }
       else if (o.kind === "up") { ctx.drawImage(o.img, x, FLOOR - o.h); }
-      else { ctx.drawImage(o.img, x, o.top); }
+      else { ctx.drawImage(o.img, x + (o.drawX || 0), o.top); }
     }
   }
 
@@ -1496,7 +1599,7 @@
       if (unlocked().length > 1) { line("cr-small", "&#8249;&ensp;" + placeByKey(save.color).name + "&ensp;&#8250;", 54); }
     };
     if (g.state === "idle") {
-      line("cr-title", "Cave Roll", 10);
+      line("cr-title cr-long", "Unleash the Swarm", 11);
       line("cr-sub cr-blink", "Press Space to roll", 33);
       line("cr-small", "Tap to hop &middot; hold to jump", 42);
       pick();
@@ -1558,6 +1661,7 @@
       font-size: calc(var(--s) * 6); letter-spacing: 0.08em; color: #d8ccb0;
       text-shadow: 0 calc(var(--s) * 0.6) 0 #000, 0 0 calc(var(--s) * 2) rgba(0,0,0,0.8); }
     #cave-roll .cr-score span { color: #fff2c8; margin-left: calc(var(--s) * 8); }
+    #cave-roll .cr-long { font-size: calc(var(--s) * 14); }
     #cave-roll .cr-blink { animation: cr-blink 1s steps(2, start) infinite; }
     @keyframes cr-blink { to { visibility: hidden; } }
   `;
@@ -1672,5 +1776,5 @@
   }
 
   window.mnrCaveRoll = { show, hide };
-  if (window.__caveRollTest) { window.__caveRollTest({ PLACES, makeStump, makeTree, makeBranch, makeStone, makeCrack, makeLeaf, makeSpike }); }
+  if (window.__caveRollTest) { window.__caveRollTest({ PLACES, makeGiantStump, makeLog, makeBranch, makeStone, makeCrack, makeLeaf, makeSpike }); }
 })();
