@@ -17,7 +17,9 @@
                 through on the ground (jump into one and you're done),
                 then back into the cave
 
-   Tap for a short hop, hold for a big jump. Things hanging from above
+   Each place is gentle the first time round; every loop through all
+   six is faster with tighter spacing. Jumps are floaty, lighter still
+   at the top. Tap for a short hop, hold for a big jump. Things hanging from above
    sit where a hop passes under them and a big jump does not.
 
    Colours: you start black (Onu-Koro). Reaching a place unlocks its
@@ -48,29 +50,41 @@
   const CEIL = 12;                   // y of the cave roof (roughly)
   const BALL_X = 56;                 // x of the ball's centre
   const BALL_R = 20.5;               // ball radius (b_03 is 41 px wide)
-  const HIT_R = 16;                  // a little forgiving
+  const HIT_R = 15;                  // a little forgiving
   const TICK_MS = 1000 / 60;
   const HOLD = 2;                    // ticks each sprite is shown
   const ROLL_STEP = 22.5;            // degrees turned every tick
 
-  const JUMP_V = 4.4;                // jump speed, px per tick
-  const GRAVITY = 0.62;              // px per tick per tick
-  const BOOST = 0.42;                // lift while the key is held...
-  const BOOST_TICKS = 12;            // ...for up to this many ticks
-  const FULL_AIR = 28;               // ticks in the air on a full jump
-  const HOP_AIR = 17;                // ticks in the air on a tap
-  // A tap hops 21-31 px, a held jump 44 px. Hanging things reach down
+  // Floaty jumps: low gravity, and lighter still around the top.
+  const JUMP_V = 3.5;                // jump speed, px per tick
+  const GRAVITY = 0.38;              // px per tick per tick
+  const HANG_V = 1.2, HANG_G = 0.4;  // slower than this, gravity x HANG_G
+  const BOOST = 0.25;                // lift while the key is held...
+  const BOOST_TICKS = 14;            // ...for up to this many ticks
+  const FULL_AIR = 42;               // ticks in the air on a full jump
+  const HOP_AIR = 30;                // ticks in the air on a tap
+  // A tap hops 22-31 px, a held jump 43 px. Hanging things reach down
   // to here, so a hop passes under them and a full jump does not.
   const TIP_MIN = 44, TIP_MAX = 52;
 
-  // Speed (px per tick): picks up fast, then keeps creeping up.
-  const SPEED_START = 4.0, SPEED_RUSH = 6.8, SPEED_RUSH_TICKS = 900;
-  const SPEED_CREEP = 0.0005, SPEED_MAX = 13.5;
+  // Speed (px per tick): picks up, then creeps up to a cap. Every loop
+  // through the six places is faster, with a higher cap and tighter
+  // spacing.
+  const SPEED_START = 3.6, SPEED_RUSH = 5.0, SPEED_RUSH_TICKS = 900;
+  const SPEED_CREEP = 0.0003, SPEED_CAP = 9.5, SPEED_MAX = 14;
+  const LOOP_SPEED = 1.5;            // added to the cap each loop
   const PLACE_POINTS = 1000;         // a new place every this many points
 
-  function speedAt(t) {
-    return Math.min(SPEED_MAX,
-      SPEED_START + SPEED_RUSH * (1 - Math.exp(-t / SPEED_RUSH_TICKS)) + SPEED_CREEP * t);
+  function loopAt(score) { return Math.floor(score / (PLACE_POINTS * PLACES.length)); }
+
+  function speedAt(t, loop) {
+    const base = SPEED_START + SPEED_RUSH * (1 - Math.exp(-t / SPEED_RUSH_TICKS)) + SPEED_CREEP * t + loop * 0.8;
+    return Math.min(SPEED_MAX, SPEED_CAP + loop * LOOP_SPEED, base);
+  }
+
+  function hardness() {
+    // 0 (easy) to 1 (hard): mostly the loop, a little the speed.
+    return Math.min(1, loopAt(g.score) * 0.35 + Math.max(0, (g.speed - SPEED_START) / (SPEED_MAX - SPEED_START)) * 0.5);
   }
 
   // Where each sprite group's feet / ball sit in its 64x64 image.
@@ -882,11 +896,12 @@
   function addLeaf(first) {
     // Ga-Koro: the next leaf after a gap of water. Small gaps take a hop,
     // big ones a full jump.
-    const hard = Math.min(1, (g.speed - SPEED_START) / (SPEED_MAX - SPEED_START));
+    const hard = hardness();
     const hopReach = HOP_AIR * g.speed, jumpReach = FULL_AIR * g.speed;
-    const gap = first ? 0 : Math.random() < 0.5 ?
-      18 + Math.random() * Math.max(4, hopReach * 0.4 - 18) :
-      hopReach * 0.4 + Math.random() * Math.max(4, jumpReach * 0.5 - hopReach * 0.4);
+    const most = 0.32 + hard * 0.13;     // of a full jump's reach
+    const gap = first ? 0 : Math.random() < 0.55 ?
+      18 + Math.random() * Math.max(4, hopReach * 0.3 - 18) :
+      hopReach * 0.3 + Math.random() * Math.max(4, jumpReach * most - hopReach * 0.3);
     const w = first ? 260 : Math.max(50, (70 + Math.random() * 110) * (1 - hard * 0.3));
     g.obstacles.push(leaf(g.leafEnd + gap, w));
     g.leafEnd += gap + w;
@@ -896,7 +911,7 @@
     // A pattern just off the right edge, picked by this place's weights.
     const x0 = W + 8;
     const P = place();
-    const hard = Math.min(1, (g.speed - SPEED_START) / (SPEED_MAX - SPEED_START));
+    const hard = hardness(), loop = loopAt(g.score);
     const R = n => Math.floor(Math.random() * n);
     const tip = () => TIP_MIN + R(TIP_MAX - TIP_MIN + 1);
     const hopReach = HOP_AIR * g.speed, jumpReach = FULL_AIR * g.speed;
@@ -922,11 +937,11 @@
       },
       // Ta-Koro: lava pits, and stalactites over some of them.
       lava: () => {
-        const w = Math.round(Math.max(26, Math.min(jumpReach * 0.5, 30 + Math.random() * jumpReach * 0.35)));
+        const w = Math.round(Math.max(26, Math.min(jumpReach * (0.3 + hard * 0.15), 30 + Math.random() * jumpReach * 0.25)));
         push(pit(x0, w)); extra = w;
       },
       lavaUnder: () => {
-        const w = Math.round(Math.max(24, Math.min(hopReach * 0.45, 28 + Math.random() * hopReach * 0.25)));
+        const w = Math.round(Math.max(24, Math.min(hopReach * (0.3 + hard * 0.12), 28 + Math.random() * hopReach * 0.2)));
         push(pit(x0, w)); push(down(x0 + Math.round(w / 2) - 8, 16, tip())); extra = w;
       },
       // Po-Koro: stones.
@@ -987,7 +1002,7 @@
       if (pick <= 0) { PATTERNS[k](); break; }
     }
     // Room to land before the next one.
-    g.untilNext = jumpReach + 70 + extra + Math.random() * (170 - 70 * hard);
+    g.untilNext = jumpReach + (100 - 20 * Math.min(loop, 3)) + extra + Math.random() * (220 - 80 * hard);
   }
 
   function changePlace(to) {
@@ -1080,7 +1095,7 @@
     // Rolling (or dropping in): the world moves every tick, the ball
     // turns 22.5 degrees.
     g.rollTicks++;
-    g.speed = speedAt(g.rollTicks);
+    g.speed = speedAt(g.rollTicks, loopAt(g.score));
     g.scroll += g.speed;
     g.angle = (g.angle + ROLL_STEP) % 360;
     for (const o of g.obstacles) { o.x -= g.speed; }
@@ -1122,7 +1137,7 @@
       g.grounded = false;
       g.y += g.vy;
       g.air++;
-      g.vy -= GRAVITY;
+      g.vy -= GRAVITY * (Math.abs(g.vy) < HANG_V ? HANG_G : 1);
       if (keyHeld && g.air <= BOOST_TICKS && g.vy > 0) { g.vy += BOOST; }
       const now = supportAt(BALL_X);
       if (g.vy <= 0 && now !== null && g.y <= now) { g.y = now; g.vy = 0; g.grounded = true; }
@@ -1408,7 +1423,10 @@
 
     // Score, speed, the name of a new place, and colours.
     drawText(ctx, "HI " + pad(save.best) + "  " + pad(g.score), W - textWidth("HI 00000  00000", 1) - 6, 4, "#f0ecf6", 1);
-    if (g.speed > 0) { drawText(ctx, "SPEED " + g.speed.toFixed(1), 6, 4, "#d0cad8", 1); }
+    if (g.speed > 0) {
+      const loop = loopAt(g.score);
+      drawText(ctx, "SPEED " + g.speed.toFixed(1) + (loop ? "  LOOP " + (loop + 1) : ""), 6, 4, "#d0cad8", 1);
+    }
     if (g.banner > 0 && Math.floor(g.banner / 8) % 2 === 0 && g.state !== "dead") {
       drawTextCentred(ctx, place().name, 30, place().title, 2);
     }
