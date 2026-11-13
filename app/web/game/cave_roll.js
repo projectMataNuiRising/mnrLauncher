@@ -49,6 +49,8 @@
   const BALL_X = 56;                 // x of the ball's centre
   const BALL_R = 20.5;               // ball radius (b_03 is 41 px wide)
   const HIT_R = 16;                  // a little forgiving
+  const LIVES = 3;                   // hits (or dips in lava / water) per run
+  const SAFE_TICKS = 100;            // flashing white after one
   const TICK_MS = 1000 / 60;
   const HOLD = 2;                    // ticks each sprite is shown
   const ROLL_STEP = 22.5;            // degrees turned every tick
@@ -157,48 +159,6 @@
   function placeAt(score) { return Math.floor(score / PLACE_POINTS) % PLACES.length; }
   function placeByKey(k) { for (const P of PLACES) { if (P.key === k) { return P; } } return PLACES[0]; }
 
-  // -- Pixel font (3 x 5) ---------------------------------------------
-  const FONT = {
-    "0": "111101101101111", "1": "010110010010111", "2": "111001111100111",
-    "3": "111001111001111", "4": "101101111001001", "5": "111100111001111",
-    "6": "111100111101111", "7": "111001001010010", "8": "111101111101111",
-    "9": "111101111001111", "A": "010101111101101", "B": "110101110101110",
-    "C": "011100100100011", "D": "110101101101110", "E": "111100110100111",
-    "F": "111100110100100", "G": "011100101101011", "H": "101101111101101",
-    "I": "111010010010111", "J": "001001001101010", "K": "101101110101101",
-    "L": "100100100100111", "M": "101111111101101", "N": "110101101101101",
-    "O": "010101101101010", "P": "110101110100100", "Q": "010101101110011",
-    "R": "110101110101101", "S": "011100010001110", "T": "111010010010010",
-    "U": "101101101101111", "V": "101101101101010", "W": "101101111111101",
-    "X": "101101010101101", "Y": "101101010010010", "Z": "111001010100111",
-    "-": "000000111000000", ".": "000000000000010", ":": "000010000010000",
-    "!": "010010010000010", " ": "000000000000000", "<": "001010100010001",
-    ">": "100010001010100", "/": "001001010100100"
-  };
-
-  function textWidth(s, size) { return s.length * 4 * size - size; }
-
-  function drawText(ctx, s, x, y, color, size) {
-    // With a dark shadow so it reads on bright skies too.
-    size = size || 1;
-    s = String(s).toUpperCase();
-    for (const [dx, col] of [[size, "rgba(0,0,0,0.55)"], [0, color]]) {
-      ctx.fillStyle = col;
-      for (let i = 0; i < s.length; i++) {
-        const gl = FONT[s[i]] || FONT[" "];
-        for (let p = 0; p < 15; p++) {
-          if (gl[p] === "1") {
-            ctx.fillRect(x + dx + i * 4 * size + (p % 3) * size, y + dx + Math.floor(p / 3) * size, size, size);
-          }
-        }
-      }
-    }
-  }
-
-  function drawTextCentred(ctx, s, y, color, size) {
-    drawText(ctx, s, Math.round((W - textWidth(s, size || 1)) / 2), y, color, size);
-  }
-
   // -- Helpers ----------------------------------------------------------
   function rng(seed) {
     // Seeded random, so each place looks the same every time.
@@ -231,7 +191,7 @@
     for (let row = 0; row < h; row++) {
       const half = ((row + 1) / h) * (w / 2);
       const a = Math.round(x + w / 2 - half), b = Math.round(x + w / 2 + half);
-      if (b > a) { fill(a, down ? row : h - 1 - row, b - a); }
+      if (b > a) { fill(a, down ? h - 1 - row : row, b - a); }
     }
   }
 
@@ -484,29 +444,46 @@
     return c;
   }
 
-  function crown(x, cx, cy, r, C) {
-    // A leafy crown: three overlapping blobs, outlined, lit from the top left.
-    const blobs = [[cx - Math.round(r * 0.55), cy + Math.round(r * 0.25), Math.round(r * 0.7)],
-      [cx + Math.round(r * 0.55), cy + Math.round(r * 0.25), Math.round(r * 0.7)], [cx, cy - Math.round(r * 0.2), Math.round(r * 0.8)]];
+  function crown(x, cx, cy, r, C, seed) {
+    // A leafy crown: five overlapping clumps, outlined, shaded from the
+    // top left, with flecks of leaves.
+    const blobs = [[0, -0.3, 0.66], [-0.4, 0.05, 0.58], [0.4, 0.05, 0.58], [-0.28, 0.35, 0.55], [0.28, 0.35, 0.55]]
+      .map(([dx, dy, br]) => [cx + Math.round(dx * r), cy + Math.round(dy * r), Math.max(2, Math.round(br * r))]);
     for (const [bx, by, br] of blobs) { disc(x, bx, by, br + 1, C.line); }
     for (const [bx, by, br] of blobs) { disc(x, bx, by, br, C.shade); }
     for (const [bx, by, br] of blobs) { disc(x, bx - 1, by - 1, Math.max(1, br - 1), C.crown); }
-    for (const [bx, by, br] of blobs) { disc(x, bx - Math.round(br * 0.35), by - Math.round(br * 0.4), Math.max(1, Math.round(br * 0.35)), C.light); }
+    for (const [bx, by, br] of blobs) {
+      disc(x, bx - Math.round(br * 0.35), by - Math.round(br * 0.4), Math.max(1, Math.round(br * 0.38)), C.light);
+    }
+    const r2 = rng(seed || 1);
+    for (let i = 0; i < r * 3; i++) {
+      const a = r2() * 6.28, d = r2() * r * 0.85;
+      const px = Math.round(cx + Math.cos(a) * d), py = Math.round(cy + Math.sin(a) * d * 0.9);
+      x.fillStyle = r2() < 0.5 ? C.light : C.shade; x.fillRect(px, py, 2, 1);
+    }
   }
 
   function makeTree(w, h, C, bush) {
-    // A young tree (trunk with roots and a full crown) or a bush.
+    // A young tree (trunk with roots, a stub of branch and a big crown)
+    // or a bush.
     const [c, x] = canvas(w, h);
-    const r = Math.floor(w / 2) - 1;
     if (!bush) {
-      const tw = Math.max(4, Math.round(w * 0.28)), tx = Math.round(w / 2 - tw / 2);
-      x.fillStyle = C.root; x.fillRect(tx - 2, h - 2, tw + 4, 2);
-      x.fillStyle = C.bark; x.fillRect(tx - 1, r, tw + 2, h - r);
-      x.fillStyle = C.trunk; x.fillRect(tx, r, tw, h - r - 1);
-      x.fillStyle = C.bark; x.fillRect(tx + Math.floor(tw / 2), r + 4, 1, h - r - 8);
-      crown(x, Math.floor(w / 2), r + 1, r, C);
+      const r = Math.min(Math.floor(w / 2) - 1, Math.round(h * 0.31));
+      const tw = Math.max(5, Math.round(w * 0.22)), tx = Math.round(w / 2 - tw / 2), cy = r + 1;
+      x.fillStyle = C.root; x.fillRect(tx - 3, h - 2, tw + 6, 2); x.fillRect(tx - 1, h - 4, tw + 2, 2);
+      x.fillStyle = C.line; x.fillRect(tx - 1, cy, tw + 2, h - cy - 2);
+      x.fillStyle = C.trunk; x.fillRect(tx, cy, tw, h - cy - 2);
+      x.fillStyle = C.bark; x.fillRect(tx + tw - 2, cy, 2, h - cy - 2);
+      x.fillStyle = "#9a7048"; x.fillRect(tx, cy, 1, h - cy - 2);
+      x.fillStyle = C.bark;
+      for (let y = cy + 4; y < h - 4; y += 5) { x.fillRect(tx + 2, y, 1, 2); }
+      // A stub of branch.
+      x.fillStyle = C.line; x.fillRect(tx + tw, cy + r - 2, 4, 3);
+      x.fillStyle = C.trunk; x.fillRect(tx + tw, cy + r - 1, 3, 1);
+      crown(x, Math.floor(w / 2), cy, r, C, w * 7 + h);
     } else {
-      crown(x, Math.floor(w / 2), h - r, r, C);
+      const r = Math.min(Math.floor(w / 2) - 1, h - 2);
+      crown(x, Math.floor(w / 2), h - Math.round(r * 0.75) - 1, r, C, w * 5 + h);
     }
     return c;
   }
@@ -545,9 +522,10 @@
     // A branch hanging from the canopy with a clump of leaves.
     const [c, x] = canvas(w, tip);
     const r = Math.floor(w / 2) - 1;
-    x.fillStyle = C.bark; x.fillRect(r - 1, 0, 3, tip - r);
-    x.fillStyle = C.trunk; x.fillRect(r, 0, 1, tip - r);
-    crown(x, r + 1, tip - r - 1, r, C);
+    x.fillStyle = C.line; x.fillRect(r - 2, 0, 5, tip - r);
+    x.fillStyle = C.trunk; x.fillRect(r - 1, 0, 3, tip - r);
+    x.fillStyle = C.bark; x.fillRect(r + 1, 0, 1, tip - r);
+    crown(x, r + 1, tip - r - 1, r, C, w * 3 + tip);
     return c;
   }
 
@@ -754,6 +732,7 @@
       newBest: false,
       fallInto: "",
       knock: null,           // knocked out of the ball: { x, y, vx, vy, a }
+      lives: LIVES, invuln: 0,   // invuln: ticks left flashing white (can't be hurt)
       dust: [], embers: [], snow: [], shards: [],
       place: 0, prev: 0, bx: -1e9, mouth: false, banner: 0, unlockBanner: 0, unlockKey: ""
     };
@@ -938,11 +917,11 @@
         push(stoneAt(x0 + w1 + 6 + R(8), w2, h2));
       },
       // Le-Koro: trees, bushes, hanging branches and stumps.
-      tree: () => { const w = 20 + R(6), h = 26 + R(8); push(box(x0, w, h, FLOOR - h, makeTree(w, h, T, false))); },
-      bush: () => { const w = 18 + R(6), h = 12 + R(4); push(box(x0, w, h, FLOOR - h, makeTree(w, h, T, true))); },
-      branch: () => { const w = 18 + R(6), t = tip(); push(box(x0, w, t, 0, makeBranch(w, t, T))); },
+      tree: () => { const w = 26 + R(8), h = 32 + R(8); push(box(x0, w, h, FLOOR - h, makeTree(w, h, T, false))); },
+      bush: () => { const w = 24 + R(6), h = 14 + R(4); push(box(x0, w, h, FLOOR - h, makeTree(w, h, T, true))); },
+      branch: () => { const w = 22 + R(6), t = tip(); push(box(x0, w, t, 0, makeBranch(w, t, T))); },
       branchOverBush: () => {
-        const w = 18 + R(4), h = 12 + R(3), bw = 18 + R(4), t = tip();
+        const w = 22 + R(4), h = 14 + R(2), bw = 22 + R(4), t = tip();
         push(box(x0, w, h, FLOOR - h, makeTree(w, h, T, true)));
         push(box(x0 + 4 + R(10), bw, t, 0, makeBranch(bw, t, T)));
       },
@@ -955,9 +934,9 @@
         extra = w1 + gap + w2;
       },
       trees: () => {
-        const h1 = 22 + R(6), h2 = 20 + R(8);
-        push(box(x0, 20, h1, FLOOR - h1, makeTree(20, h1, T, false)));
-        push(box(x0 + 30 + R(10), 20, h2, FLOOR - h2, makeTree(20, h2, T, false)));
+        const h1 = 28 + R(6), h2 = 26 + R(8);
+        push(box(x0, 26, h1, FLOOR - h1, makeTree(26, h1, T, false)));
+        push(box(x0 + 40 + R(10), 26, h2, FLOOR - h2, makeTree(26, h2, T, false)));
       },
       // Ko-Koro: ice spikes, and cracked icicles to smash through.
       iceTall: () => push(up(x0, 16 + R(6), 24 + R(10))),
@@ -1027,6 +1006,39 @@
     if (s > save.best) { save.best = s; g.newBest = true; storeSave(); }
   }
 
+  function burst(o) {
+    // Whatever was hit flies apart into its own pixels.
+    if (o.img) {
+      const top = o.kind === "up" ? FLOOR - o.h : o.top;
+      let data = null;
+      try { data = o.img.getContext("2d").getImageData(0, 0, o.img.width, o.img.height).data; } catch (e) {}
+      if (data) {
+        for (let py = 0; py < o.img.height; py += 2) {
+          for (let px = 0; px < o.img.width; px += 2) {
+            const i = (py * o.img.width + px) * 4;
+            if (data[i + 3] < 128) { continue; }
+            g.shards.push({ x: o.x + px, y: top + py, vx: Math.random() * 5 - 1, vy: -1 - Math.random() * 3,
+              life: 30 + Math.floor(Math.random() * 25), col: "rgb(" + data[i] + "," + data[i + 1] + "," + data[i + 2] + ")" });
+          }
+        }
+      }
+    }
+    const i = g.obstacles.indexOf(o);
+    if (i >= 0) { g.obstacles.splice(i, 1); }
+  }
+
+  function hurt(o) {
+    // Lose a life and flash white, or with the last one, game over.
+    if (g.lives > 1) {
+      g.lives--;
+      g.invuln = SAFE_TICKS;
+      if (o.kind === "crack") { shatter(o); } else { burst(o); }
+      return false;
+    }
+    die("hit");
+    return true;
+  }
+
   function shatter(o) {
     // Ice bits flying everywhere.
     for (let i = 0; i < 40; i++) {
@@ -1055,6 +1067,7 @@
       g.snow.push({ x: Math.random() * (W + 120), y: -2, vx: 0.3 + Math.random() * 0.6, vy: 0.4 + Math.random() * 0.6 });
     }
     if (g.banner > 0) { g.banner--; }
+    if (g.invuln > 0 && (g.state === "roll" || g.state === "fall")) { g.invuln--; }
     if (g.unlockBanner > 0) { g.unlockBanner--; }
 
     if (g.state === "idle") { return; }
@@ -1102,6 +1115,19 @@
     if (g.state === "fall") {
       g.vy -= GRAVITY;
       g.y += g.vy;
+      if (g.y < -14 && (g.lives > 1 || g.invuln > 0)) {
+        // Bounce back out, flashing white (a life gone, unless still
+        // flashing from the last one).
+        if (g.invuln <= 0) { g.lives--; g.invuln = SAFE_TICKS; }
+        g.state = "roll"; g.vy = 6.8; g.air = BOOST_TICKS; g.grounded = false;
+        const hot = g.fallInto !== "water";
+        for (let i = 0; i < 16; i++) {
+          g.dust.push({ x: BALL_X - 14 + Math.random() * 28, y: FLOOR + 2, vx: Math.random() * 2 - 1 + g.speed * 0.2,
+            vy: 1.5 + Math.random() * 2.5, life: 16 + Math.floor(Math.random() * 8), col: hot ? "#ffd060" : "#cfeeff",
+            col2: hot ? "#ff7a1a" : "#8cc8f0" });
+        }
+        return;
+      }
       if (g.y < -BALL_R * 2 - 10) { die("drop"); }
       return;
     }
@@ -1126,7 +1152,7 @@
       if (keyHeld && g.air <= BOOST_TICKS && g.vy > 0) { g.vy += BOOST; }
       const now = supportAt(BALL_X);
       if (g.vy <= 0 && now !== null && g.y <= now) { g.y = now; g.vy = 0; g.grounded = true; }
-      else if (now === null && g.y <= 0) { dropped = true; }
+      else if (now === null && g.y <= 0 && g.vy <= 0) { dropped = true; }
     }
     if (dropped) {
       g.state = "fall";
@@ -1154,12 +1180,14 @@
 
     const cy = FLOOR - BALL_R - g.y;
     for (const o of g.obstacles.slice()) {
-      if ((o.kind === "up" || o.kind === "down") && circleHitsTriangle(BALL_X, cy, HIT_R, triangle(o))) { die("hit"); break; }
-      if (o.kind === "box" && circleHitsBox(BALL_X, cy, HIT_R, o)) { die("hit"); break; }
-      if (o.kind === "stump" && g.y < o.h - 4 && circleHitsBox(BALL_X, cy, HIT_R, o)) { die("hit"); break; }
-      if (o.kind === "crack" && circleHitsBox(BALL_X, cy, HIT_R, { x: o.x + 4, w: o.w - 8, top: o.top, h: o.h })) {
-        if (onSurface()) { shatter(o); } else { die("hit"); break; }
+      let hit = false;
+      if (o.kind === "up" || o.kind === "down") { hit = circleHitsTriangle(BALL_X, cy, HIT_R, triangle(o)); }
+      else if (o.kind === "box") { hit = circleHitsBox(BALL_X, cy, HIT_R, o); }
+      else if (o.kind === "stump") { hit = g.y < o.h - 4 && circleHitsBox(BALL_X, cy, HIT_R, o); }
+      else if (o.kind === "crack" && circleHitsBox(BALL_X, cy, HIT_R, { x: o.x + 4, w: o.w - 8, top: o.top, h: o.h })) {
+        if (onSurface()) { shatter(o); } else { hit = true; }
       }
+      if (hit && g.invuln <= 0 && hurt(o)) { break; }
     }
   }
 
@@ -1370,6 +1398,8 @@
     }
 
     // The little guy.
+    const flash = g.invuln > 0 && Math.floor(g.invuln / 4) % 2 === 0;
+    if (flash) { ctx.filter = "brightness(0) invert(1)"; }
     if (g.state === "idle" || g.state === "ready" || g.state === "hop") {
       const group = g.state === "hop" ? "b_02" : "b_01";
       ctx.drawImage(sprite(group, g.tick), Math.round(BALL_X - CENTRE_X[group]), FLOOR - BOTTOM[group]);
@@ -1402,38 +1432,89 @@
       ctx.drawImage(img, -32, -32);
       ctx.restore();
     }
+    ctx.filter = "none";
 
     for (const sh of g.shards) { ctx.fillStyle = sh.col; ctx.fillRect(Math.round(sh.x), Math.round(sh.y), 2, 2); }
     for (const f of g.snow) { ctx.fillStyle = "#ffffff"; ctx.fillRect(Math.round(f.x), Math.round(f.y), 1, 1); }
 
-    // Score, speed, the name of a new place, and colours.
-    drawText(ctx, "HI " + pad(save.best) + "  " + pad(g.score), W - textWidth("HI 00000  00000", 1) - 6, 4, "#f0ecf6", 1);
-    if (g.speed > 0) { drawText(ctx, "SPEED " + g.speed.toFixed(1), 6, 4, "#d0cad8", 1); }
-    if (g.banner > 0 && Math.floor(g.banner / 8) % 2 === 0 && g.state !== "dead") {
-      drawTextCentred(ctx, place().name, 30, place().title, 2);
-    }
-    if (g.unlockBanner > 0 && g.state !== "dead") {
-      drawTextCentred(ctx, "NEW COLOUR UNLOCKED: " + placeByKey(g.unlockKey).name, 46, placeByKey(g.unlockKey).title, 1);
-    }
+    // Lives, and the colour picker; the words are in the HTML over it.
+    drawLives();
+    if (g.state === "idle" || (g.state === "dead" && g.deadTick > 30)) { drawPicker(); }
+    updateHud();
+  }
 
-    const colourLine = () => {
-      const list = unlocked();
-      if (list.length > 1) {
-        drawTextCentred(ctx, "< " + placeByKey(save.color).name + " >  " + list.length + "/" + PLACES.length, 74,
-          placeByKey(save.color).title, 1);
-        drawTextCentred(ctx, "LEFT / RIGHT: COLOUR", 82, "#c8c2d2", 1);
+  // -- Lives and the colour picker (on the canvas) -----------------------------
+  const PICK = { y: 88, size: 32, gap: 6 };
+
+  function pickerBoxes() {
+    const n = PLACES.length, w = PICK.size + 2;
+    const x0 = Math.round((W - (n * w + (n - 1) * PICK.gap)) / 2);
+    return PLACES.map((P, i) => ({ key: P.key, x: x0 + i * (w + PICK.gap), y: PICK.y, w, h: w }));
+  }
+
+  function drawPicker() {
+    // The standing Bohrok in each colour; locked ones are shadows.
+    for (const b of pickerBoxes()) {
+      const open = save.unlocked.indexOf(b.key) >= 0, chosen = b.key === save.color;
+      ctx.fillStyle = "rgba(10,8,14,0.55)"; ctx.fillRect(b.x, b.y, b.w, b.h);
+      ctx.fillStyle = chosen ? "#f0cc6a" : open ? "#8a8296" : "#2e2a36";
+      ctx.fillRect(b.x, b.y, b.w, 1); ctx.fillRect(b.x, b.y + b.h - 1, b.w, 1);
+      ctx.fillRect(b.x, b.y, 1, b.h); ctx.fillRect(b.x + b.w - 1, b.y, 1, b.h);
+      if (chosen) {
+        ctx.fillRect(b.x - 1, b.y - 1, b.w + 2, 1); ctx.fillRect(b.x - 1, b.y + b.h, b.w + 2, 1);
+        ctx.fillRect(b.x - 1, b.y - 1, 1, b.h + 2); ctx.fillRect(b.x + b.w, b.y - 1, 1, b.h + 2);
       }
+      const frame = chosen ? Math.floor(clock / HOLD) % FRAMES.b_01 : 0;
+      const img = spriteOf(b.key, "b_01_" + String(frame + 1).padStart(2, "0"));
+      ctx.save();
+      if (!open) { ctx.filter = "brightness(0)"; ctx.globalAlpha = 0.55; }
+      ctx.drawImage(img, b.x + 1, b.y + 1, PICK.size, PICK.size);
+      ctx.restore();
+    }
+  }
+
+  function drawLives() {
+    // One little ball per life left, top left.
+    const img = spriteOf(save.color, "b_03_01");
+    for (let i = 0; i < LIVES; i++) {
+      ctx.save();
+      if (i >= g.lives) { ctx.filter = "brightness(0.25)"; ctx.globalAlpha = 0.6; }
+      ctx.drawImage(img, 4 + i * 15, 3, 16, 16);
+      ctx.restore();
+    }
+  }
+
+  // -- Words: Bionicle-style lettering over the game (HTML) -------------------
+  let hud = null, hudKey = "";
+
+  function hudHtml() {
+    const P = place();
+    const out = [];
+    const line = (cls, text, top) => out.push('<div class="' + cls + '" style="top:' + top + '%">' + text + "</div>");
+    out.push('<div class="cr-score">Best ' + Math.floor(save.best) + '<span>' + Math.floor(g.score) + "</span></div>");
+    const pick = () => {
+      if (unlocked().length > 1) { line("cr-small", "&#8249;&ensp;" + placeByKey(save.color).name + "&ensp;&#8250;", 54); }
     };
     if (g.state === "idle") {
-      drawTextCentred(ctx, "CAVE ROLL", 34, "#7ee0a0", 2);
-      if (Math.floor(g.tick / 30) % 2 === 0) { drawTextCentred(ctx, "PRESS SPACE", 52, "#f0ecf6", 1); }
-      drawTextCentred(ctx, "TAP TO HOP - HOLD TO JUMP", 62, "#c8c2d2", 1);
-      colourLine();
+      line("cr-title", "Cave Roll", 10);
+      line("cr-sub cr-blink", "Press Space to roll", 33);
+      line("cr-small", "Tap to hop &middot; hold to jump", 42);
+      pick();
     } else if (g.state === "dead") {
-      drawTextCentred(ctx, "GAME OVER", 34, "#ff8a8a", 2);
-      if (g.newBest) { drawTextCentred(ctx, "NEW BEST!", 52, "#ffd27e", 1); }
-      if (g.deadTick > 30) { drawTextCentred(ctx, "SPACE TO GO AGAIN", 62, "#f0ecf6", 1); colourLine(); }
+      line("cr-title", "Game Over", 8);
+      line("cr-sub", (g.newBest ? "New best &middot; " : "") + Math.floor(g.score), 30);
+      if (g.deadTick > 30) { line("cr-small", "Space to roll again", 41); pick(); }
+    } else {
+      if (g.banner > 0) { line("cr-title cr-place", '<span style="--c:' + P.title + '">' + P.name + "</span>", 14); }
+      if (g.unlockBanner > 0) { line("cr-small", "New colour unlocked &middot; " + placeByKey(g.unlockKey).name, 34); }
     }
+    return out.join("");
+  }
+
+  function updateHud() {
+    if (!hud) { return; }
+    const html = hudHtml();
+    if (html !== hudKey) { hud.innerHTML = html; hudKey = html; }
   }
 
   function frame(t) {
@@ -1452,7 +1533,34 @@
     const s = Math.max(1, Math.floor(Math.min((window.innerWidth - 60) / W, (window.innerHeight - 100) / H)));
     view.style.width = W * s + "px";
     view.style.height = H * s + "px";
+    overlay.style.setProperty("--s", s + "px");
   }
+
+  const STYLE = `
+    @font-face { font-family: "MNR Cinzel"; font-weight: 700; src: url("game/fonts/cinzel-latin-700-normal.woff2") format("woff2"); }
+    @font-face { font-family: "MNR Cinzel"; font-weight: 900; src: url("game/fonts/cinzel-latin-900-normal.woff2") format("woff2"); }
+    #cave-roll .cr-wrap { position: relative; }
+    #cave-roll .cr-hud { position: absolute; inset: 0; pointer-events: none; font-family: "MNR Cinzel", "Copperplate Gothic Bold", serif;
+      color: #f2ead6; text-align: center; }
+    #cave-roll .cr-hud > div { position: absolute; left: 0; right: 0; white-space: nowrap; }
+    #cave-roll .cr-title { font-weight: 900; font-size: calc(var(--s) * 17); letter-spacing: 0.06em;
+      background: linear-gradient(180deg, #fff6d0 0%, #f0cc6a 42%, #a8782a 58%, #f6dc8c 100%);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+      filter: drop-shadow(0 calc(var(--s) * 1) 0 #1a1208) drop-shadow(0 0 calc(var(--s) * 3) rgba(0,0,0,0.55)); }
+    #cave-roll .cr-place { background: none; }
+    #cave-roll .cr-place span { background: linear-gradient(180deg, #ffffff 0%, var(--c) 55%, #4a3a2a 140%);
+      -webkit-background-clip: text; background-clip: text; color: transparent; }
+    #cave-roll .cr-sub { font-weight: 700; font-size: calc(var(--s) * 8); letter-spacing: 0.08em;
+      text-shadow: 0 calc(var(--s) * 0.7) 0 #000, 0 0 calc(var(--s) * 3) rgba(0,0,0,0.7); }
+    #cave-roll .cr-small { font-weight: 700; font-size: calc(var(--s) * 5.5); letter-spacing: 0.1em; color: #e8dcc0;
+      text-shadow: 0 calc(var(--s) * 0.6) 0 #000, 0 0 calc(var(--s) * 2) rgba(0,0,0,0.8); }
+    #cave-roll .cr-score { top: calc(var(--s) * 3); right: calc(var(--s) * 6) !important; left: auto !important; font-weight: 700;
+      font-size: calc(var(--s) * 6); letter-spacing: 0.08em; color: #d8ccb0;
+      text-shadow: 0 calc(var(--s) * 0.6) 0 #000, 0 0 calc(var(--s) * 2) rgba(0,0,0,0.8); }
+    #cave-roll .cr-score span { color: #fff2c8; margin-left: calc(var(--s) * 8); }
+    #cave-roll .cr-blink { animation: cr-blink 1s steps(2, start) infinite; }
+    @keyframes cr-blink { to { visibility: hidden; } }
+  `;
 
   function build() {
     overlay = document.createElement("div");
@@ -1464,7 +1572,7 @@
     view.style.cssText = "image-rendering:pixelated;image-rendering:crisp-edges;" +
       "border:2px solid #35363b;border-radius:4px;cursor:pointer;background:#15141b";
     const hint = document.createElement("div");
-    hint.textContent = "Space / Up / click to jump  ·  Left / Right to change colour  ·  Esc to close";
+    hint.textContent = "Space / Up / click to jump  \u00b7  Left / Right or click a box to change colour  \u00b7  Esc to close";
     hint.style.cssText = "margin-top:10px;font-size:11px;color:#8b8d93";
     const close = document.createElement("button");
     close.textContent = "×";
@@ -1472,12 +1580,33 @@
     close.style.cssText = "position:absolute;top:14px;right:18px;font-size:22px;background:none;" +
       "border:none;color:#8b8d93;cursor:pointer";
     close.onclick = hide;
-    overlay.append(view, hint, close);
+    const style = document.createElement("style");
+    style.textContent = STYLE;
+    const wrap = document.createElement("div");
+    wrap.className = "cr-wrap";
+    hud = document.createElement("div");
+    hud.className = "cr-hud";
+    wrap.append(view, hud);
+    overlay.append(style, wrap, hint, close);
     document.body.appendChild(overlay);
     ctx = view.getContext("2d");
     ctx.imageSmoothingEnabled = false;
 
-    view.addEventListener("pointerdown", e => { e.preventDefault(); keyHeld = true; jumpPressed(); });
+    view.addEventListener("pointerdown", e => {
+      e.preventDefault();
+      if (g && (g.state === "idle" || (g.state === "dead" && g.deadTick > 30))) {
+        // Clicking a box picks that colour.
+        const r = view.getBoundingClientRect();
+        const px = (e.clientX - r.left) / (r.width / W), py = (e.clientY - r.top) / (r.height / H);
+        for (const b of pickerBoxes()) {
+          if (px >= b.x && px < b.x + b.w && py >= b.y && py < b.y + b.h) {
+            if (save.unlocked.indexOf(b.key) >= 0) { save.color = b.key; storeSave(); }
+            return;
+          }
+        }
+      }
+      keyHeld = true; jumpPressed();
+    });
     view.addEventListener("pointerup", () => { keyHeld = false; });
     view.addEventListener("pointerleave", () => { keyHeld = false; });
     window.addEventListener("resize", () => { if (running) { fit(); } });
