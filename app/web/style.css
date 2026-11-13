@@ -315,6 +315,18 @@ body {
   user-select: text;
 }
 
+/* The hidden game's button (game/cave_roll.js). */
+.debug-secret-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
 .debug-dev-section {
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);

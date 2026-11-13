@@ -1,8 +1,7 @@
 /* Cave Roll - the MNR Launcher's hidden game.
 
-   Unlock: the Konami code (up up down down left right left right B A)
-   anywhere in the launcher, or click the version text at the bottom
-   right 7 times quickly. Esc closes it.
+   Opened from the Debug panel: "Open Bohrok Canister" > Open (tick
+   Debug at the top of the launcher). Esc closes it.
 
    A Chrome-dino style runner: the little guy waits (b_01), hops off
    (b_02), then rolls (b_03) through a cave. Jump over stalagmites
@@ -493,50 +492,32 @@
 
   function isOpen() { return running; }
 
-  // ── Keys while playing, and the unlocks ──────────────────────────
+  // ── Keys while playing, and the way in ──────────────────────────
   const JUMP_KEYS = [" ", "ArrowUp", "w", "W"];
-  const KONAMI = ["ArrowUp", "ArrowUp", "ArrowDown", "ArrowDown", "ArrowLeft", "ArrowRight",
-    "ArrowLeft", "ArrowRight", "b", "a"];
-  let konami = 0;
 
   document.addEventListener("keydown", e => {
-    if (isOpen()) {
-      if (e.key === "Escape") { hide(); e.preventDefault(); return; }
-      if (JUMP_KEYS.includes(e.key)) {
-        e.preventDefault();
-        if (!e.repeat) { keyHeld = true; jumpPressed(); }
-      }
-      e.stopPropagation();
-      return;
+    if (!isOpen()) { return; }
+    if (e.key === "Escape") { hide(); e.preventDefault(); return; }
+    if (JUMP_KEYS.includes(e.key)) {
+      e.preventDefault();
+      if (!e.repeat) { keyHeld = true; jumpPressed(); }
     }
-    const t = e.target;
-    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) { konami = 0; return; }
-    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-    konami = k === KONAMI[konami] ? konami + 1 : (k === KONAMI[0] ? 1 : 0);
-    if (konami === KONAMI.length) { konami = 0; show(); }
+    e.stopPropagation();
   }, true);
 
   document.addEventListener("keyup", e => {
     if (JUMP_KEYS.includes(e.key)) { keyHeld = false; }
   }, true);
 
-  // 7 quick clicks on the version text.
-  function hookBadge() {
-    const badge = document.getElementById("version-badge");
-    if (!badge) { return; }
-    badge.style.pointerEvents = "auto";
-    let clicks = [];
-    badge.addEventListener("click", () => {
-      const now = Date.now();
-      clicks = clicks.filter(c => now - c < 3000);
-      clicks.push(now);
-      if (clicks.length >= 7) { clicks = []; show(); }
-    });
+  // Debug panel > "Open Bohrok Canister" > Open.
+  function hookButton() {
+    const b = document.getElementById("bohrok-canister-open");
+    if (b) { b.addEventListener("click", show); }
   }
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", hookBadge);
+    document.addEventListener("DOMContentLoaded", hookButton);
   } else {
-    hookBadge();
+    hookButton();
   }
 
   window.mnrCaveRoll = { show, hide };
