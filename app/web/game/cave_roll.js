@@ -821,8 +821,22 @@
   function cycleColor(step) {
     const list = unlocked();
     const i = Math.max(0, list.indexOf(save.color));
-    save.color = list[(i + step + list.length) % list.length];
+    pickColor(list[(i + step + list.length) % list.length]);
+  }
+
+  function pickColor(key) {
+    // Picking a colour also gives that colour's hearts and power (on the
+    // title screen now; after a game over, when the next run starts).
+    save.color = key;
     storeSave();
+    if (g && g.state === "idle") { applyPower(); }
+  }
+
+  function applyPower() {
+    const P = POWERS[save.color];
+    g.power = save.color;
+    g.lives = P.lives;
+    g.shield = !!P.shield;
   }
 
   // -- State --------------------------------------------------------------
@@ -971,7 +985,7 @@
 
   function jumpPressed() {
     if (!g) { return; }
-    if (g.state === "idle") { g.state = "hop"; g.tick = 0; return; }
+    if (g.state === "idle") { applyPower(); g.state = "hop"; g.tick = 0; return; }
     if (g.state === "dead") {
       if (g.deadTick > 30) { reset("ready"); }
       return;
@@ -1878,7 +1892,7 @@
         const px = (e.clientX - r.left) / (r.width / W), py = (e.clientY - r.top) / (r.height / H);
         for (const b of pickerBoxes()) {
           if (px >= b.x && px < b.x + b.w && py >= b.y && py < b.y + b.h) {
-            if (save.unlocked.indexOf(b.key) >= 0) { save.color = b.key; storeSave(); }
+            if (save.unlocked.indexOf(b.key) >= 0) { pickColor(b.key); }
             return;
           }
         }
