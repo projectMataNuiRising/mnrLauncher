@@ -1159,15 +1159,17 @@
   }
 
   function addLeaf(first) {
-    // Ga-Koro: the next leaf after a gap of water. Small gaps take a hop,
-    // big ones a full jump.
+    // Ga-Koro: the next leaf after a gap of water. Either a tiny gap
+    // between leaves bunched together (he just rolls over it: he can stand
+    // 8 px past a leaf's end) or a proper gap that takes a jump.
     const hard = Math.min(1, (g.speed - SPEED_START) / (SPEED_MAX - SPEED_START));
     const hopReach = HOP_AIR * g.speed, jumpReach = FULL_AIR * g.speed;
-    // Long leaves, mostly short gaps: lots of jumping, but forgiving.
-    const gap = first ? 0 : Math.random() < 0.6 ?
-      16 + Math.random() * Math.max(4, hopReach * 0.3 - 16) :
-      hopReach * 0.3 + Math.random() * Math.max(4, jumpReach * 0.38 - hopReach * 0.3);
-    const w = first ? 300 : Math.max(90, (120 + Math.random() * 110) * (1 - hard * 0.25));
+    const close = !first && Math.random() < 0.4;
+    const gap = first ? 0 : close ?
+      3 + Math.random() * 8 :
+      hopReach * 0.45 + Math.random() * Math.max(6, jumpReach * 0.4 - hopReach * 0.45);
+    const w = first ? 300 : close ? 60 + Math.random() * 60 :
+      Math.max(90, (120 + Math.random() * 110) * (1 - hard * 0.25));
     g.obstacles.push(leaf(g.leafEnd + gap, w));
     g.leafEnd += gap + w;
   }
