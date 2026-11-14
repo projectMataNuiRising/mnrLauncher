@@ -55,7 +55,7 @@
   const CEIL = 12;                   // y of the cave roof (roughly)
   const BALL_X = 56;                 // x of the ball's centre
   const BALL_R = 20.5;               // ball radius (b_03 is 41 px wide)
-  const HIT_R = 16;                  // a little forgiving
+  const HIT_R = 13;                  // forgiving: well inside the ball
   // Each colour's power. lives: hearts per run.
   const POWERS = {
     onu: { lives: 4, text: "4 hearts." },
@@ -449,6 +449,93 @@
       x.fillRect(px, py, 1 + Math.floor(r() * 3), 1);
     }
     if (P.ground === "water") { x.clearRect(0, 0, TILE, 3); }
+    if (P.look === "forest") { forestDirt(x, P); }
+    return c;
+  }
+
+  function forestDirt(x, P) {
+    // Le-Koro's ground: a ragged grass edge, fallen leaves, roots, pebbles,
+    // a buried old bone or two and darker soil lower down.
+    const r = rng(77), D = H - FLOOR;
+    for (let y = 9; y < D; y++) {
+      for (let i = 0; i < TILE / 6; i++) {
+        if (r() < (y - 8) / D) { x.fillStyle = P.floor[4]; x.fillRect(Math.floor(r() * TILE), y, 2, 1); }
+      }
+    }
+    for (let px = 0; px < TILE; px++) {
+      const d = 2 + Math.floor(r() * 3) + (r() < 0.15 ? 2 : 0);
+      x.fillStyle = P.floor[1]; x.fillRect(px, 0, 1, 1);
+      x.fillStyle = P.floor[2]; x.fillRect(px, 1, 1, d - 1);
+      x.fillStyle = "#2c6a28"; x.fillRect(px, d, 1, 1);
+    }
+    const leaf = ["#c8862a", "#a8641e", "#d8a83a", "#7a8a2a"];
+    for (let i = 0; i < TILE / 5; i++) {
+      x.fillStyle = leaf[Math.floor(r() * leaf.length)];
+      x.fillRect(Math.floor(r() * TILE), 2 + Math.floor(r() * 4), 2, 1);
+    }
+    for (let i = 0; i < TILE / 40; i++) {
+      // A root snaking along under the grass.
+      let rx = Math.floor(r() * TILE), ry = 5 + Math.floor(r() * 8);
+      const len = 14 + Math.floor(r() * 26);
+      for (let k = 0; k < len; k++) {
+        x.fillStyle = "#2a1a0c"; x.fillRect(rx % TILE, ry + 1, 1, 1);
+        x.fillStyle = "#6a4a2a"; x.fillRect(rx % TILE, ry, 1, 1);
+        rx++; if (r() < 0.25) { ry = Math.max(5, Math.min(D - 3, ry + (r() < 0.5 ? -1 : 1))); }
+      }
+    }
+    for (let i = 0; i < TILE / 22; i++) {
+      // Pebbles.
+      const px = Math.floor(r() * TILE), py = 7 + Math.floor(r() * (D - 10)), w = 2 + Math.floor(r() * 3);
+      x.fillStyle = "#3a3632"; x.fillRect(px, py, w + 1, 3);
+      x.fillStyle = "#8a847a"; x.fillRect(px, py, w, 2);
+      x.fillStyle = "#b4ada0"; x.fillRect(px, py, 1, 1);
+    }
+    for (let i = 0; i < 2; i++) {
+      // An old bone.
+      const px = 30 + Math.floor(r() * (TILE - 60)), py = 11 + Math.floor(r() * 4);
+      x.fillStyle = "#d8ceb0"; x.fillRect(px, py, 7, 1);
+      x.fillRect(px - 1, py - 1, 2, 1); x.fillRect(px - 1, py + 1, 2, 1);
+      x.fillRect(px + 6, py - 1, 2, 1); x.fillRect(px + 6, py + 1, 2, 1);
+    }
+  }
+
+  function makeFringe(P) {
+    // Le-Koro: grass tufts, little flowers, mushrooms and fern sprigs that
+    // stand on the ground line (bottom row sits on the ground).
+    const fh = 9, [c, x] = canvas(TILE, fh);
+    const r = rng(91);
+    for (let px = 0; px < TILE; px++) {
+      if (r() < 0.45) {
+        const h = 1 + Math.floor(r() * 3) + (r() < 0.2 ? 2 : 0);
+        x.fillStyle = r() < 0.5 ? P.floor[1] : "#74b850"; x.fillRect(px, fh - 1 - h, 1, h);
+        x.fillStyle = "#2c6a28"; x.fillRect(px, fh - 1, 1, 1);
+      }
+    }
+    for (let i = 0; i < TILE / 34; i++) {
+      // A flower.
+      const px = Math.floor(r() * TILE), h = 3 + Math.floor(r() * 3);
+      x.fillStyle = "#3f8a34"; x.fillRect(px, fh - 1 - h, 1, h);
+      x.fillStyle = ["#ffffff", "#ffe060", "#ff9ad0", "#a8c8ff"][Math.floor(r() * 4)];
+      x.fillRect(px - 1, fh - 1 - h, 3, 1); x.fillRect(px, fh - 2 - h, 1, 3);
+      x.fillStyle = "#ffcc30"; x.fillRect(px, fh - 1 - h, 1, 1);
+    }
+    for (let i = 0; i < TILE / 70; i++) {
+      // A red mushroom with white spots.
+      const px = Math.floor(r() * (TILE - 6));
+      x.fillStyle = "#efe4cc"; x.fillRect(px + 2, fh - 4, 2, 3);
+      x.fillStyle = "#5a1010"; x.fillRect(px, fh - 6, 6, 2); x.fillRect(px + 1, fh - 7, 4, 1);
+      x.fillStyle = "#d02a20"; x.fillRect(px + 1, fh - 6, 4, 1); x.fillRect(px + 2, fh - 7, 2, 1);
+      x.fillStyle = "#ffffff"; x.fillRect(px + 1, fh - 6, 1, 1); x.fillRect(px + 4, fh - 6, 1, 1);
+    }
+    for (let i = 0; i < TILE / 50; i++) {
+      // A fern sprig.
+      const px = Math.floor(r() * (TILE - 8));
+      for (let k = 0; k < 6; k++) {
+        x.fillStyle = k % 2 ? "#4a9a3a" : "#62b048";
+        x.fillRect(px + k, fh - 2 - Math.floor(k * 0.9), 2, 1);
+        x.fillRect(px + k + 1, fh - 1 - Math.floor(k * 0.9), 1, 1);
+      }
+    }
     return c;
   }
 
@@ -523,43 +610,77 @@
     return t < 0.12 ? C.light : t < 0.3 ? C.hi : t < 0.62 ? C.light : t < 0.85 ? C.mid : C.dark;
   }
 
+  const STUMP_PAD = 12;   // a stump's roots spread this far past its box
+
   function makeGiantStump(w, h, C) {
-    // A giant cut-down tree: deep bark fissures, moss, roots spreading
-    // into the ground, and a cut face with growth rings on top.
-    const pad = 6, cw = w + pad * 2;
+    // A giant cut-down tree: big root flare gripping the ground, deep bark
+    // fissures with lit ridges, moss and ivy on the shady side, shelf
+    // fungus, and a sawn face with growth rings and splinters on top.
+    const pad = STUMP_PAD, cw = w + pad * 2;
     const [c, x] = canvas(cw, h);
     const r = rng(w * 13 + h * 7);
-    const faceH = Math.max(4, Math.round(w * 0.16));
+    const faceH = Math.max(5, Math.round(w * 0.2));
+    const flare = Math.min(16, Math.round(h * 0.32));
+    const edge = [];
     for (let y = Math.floor(faceH / 2); y < h; y++) {
       const fromBottom = h - 1 - y;
-      const spread = fromBottom < 9 ? Math.round(Math.pow(9 - fromBottom, 1.35) * 0.55) : 0;
+      const spread = fromBottom < flare ? Math.round(Math.pow((flare - fromBottom) / flare, 2.2) * pad) : 0;
       const a = pad - spread, b = pad + w + spread;
+      edge[y] = [a, b];
       for (let px = a; px < b; px++) {
         const t = (px - a) / Math.max(1, b - a - 1);
         x.fillStyle = barkColumn(t, C); x.fillRect(px, y, 1, 1);
       }
       x.fillStyle = C.line; x.fillRect(a, y, 1, 1); x.fillRect(b - 1, y, 1, 1);
     }
-    // Fissures running up the bark, broken here and there.
+    // Root buttresses: dark grooves splitting the flare into roots.
+    for (const f of [0.18, 0.5, 0.8]) {
+      const gx = pad + Math.round(w * f);
+      for (let k = 0; k < flare; k++) {
+        const y = h - 1 - k, dx = Math.round((f - 0.5) * (flare - k) * 0.9);
+        x.fillStyle = C.line; x.fillRect(gx + dx, y, 1, 1);
+        x.fillStyle = C.dark; x.fillRect(gx + dx + 1, y, 1, 1);
+      }
+    }
+    // Fissures running up the bark with a lit ridge beside each.
     for (let fx = pad + 3; fx < pad + w - 2; fx += 3 + Math.floor(r() * 3)) {
       let y = faceH + Math.floor(r() * 6);
       while (y < h - 3) {
-        const len = 4 + Math.floor(r() * 10);
-        x.fillStyle = C.dark; x.fillRect(fx, y, 1, Math.min(len, h - 3 - y));
-        x.fillStyle = C.line; if (r() < 0.5) { x.fillRect(fx, y + 1, 1, Math.max(1, Math.min(len - 2, h - 4 - y))); }
+        const len = 5 + Math.floor(r() * 12), l = Math.min(len, h - 3 - y);
+        x.fillStyle = C.line; x.fillRect(fx, y, 1, l);
+        x.fillStyle = C.dark; x.fillRect(fx + 1, y + 1, 1, Math.max(1, l - 2));
+        if (fx - pad < w * 0.6) { x.fillStyle = C.hi; x.fillRect(fx - 1, y + 1, 1, Math.max(1, l - 3)); }
         y += len + 2 + Math.floor(r() * 4);
       }
     }
-    // Moss on the shady side and near the roots.
-    for (let i = 0; i < w; i++) {
-      const mx = pad + Math.floor(w * (0.55 + r() * 0.45)) - 1, my = faceH + Math.floor(r() * (h - faceH));
+    // Moss up the shady side and around the roots; ivy climbing.
+    for (let i = 0; i < w * 1.5; i++) {
+      const my = faceH + Math.floor(r() * (h - faceH));
+      const [a, b] = edge[my] || [pad, pad + w];
+      const mx = Math.round(a + (b - a) * (0.6 + r() * 0.38));
       x.fillStyle = r() < 0.6 ? C.moss : C.mossHi; x.fillRect(mx, my, 1 + Math.floor(r() * 2), 1);
     }
-    for (let i = 0; i < w / 2; i++) {
+    for (let i = 0; i < cw; i++) {
+      const my = h - 1 - Math.floor(r() * 6), [a, b] = edge[my];
       x.fillStyle = r() < 0.5 ? C.moss : C.mossHi;
-      x.fillRect(Math.floor(r() * cw), h - 1 - Math.floor(r() * 5), 2, 1);
+      x.fillRect(a + 1 + Math.floor(r() * (b - a - 2)), my, 2, 1);
     }
-    // The cut face: an oval of pale wood with rings and a crack.
+    let vx = pad + Math.round(w * 0.2);
+    for (let y = h - 2; y > faceH + 2; y--) {
+      vx += Math.round(Math.sin(y * 0.5) * 0.8);
+      x.fillStyle = "#2c5a1e"; x.fillRect(vx, y, 1, 1);
+      if (y % 4 === 0) { x.fillStyle = y % 8 ? C.mossHi : "#4a9a3a"; x.fillRect(vx + (y % 8 ? 1 : -2), y - 1, 2, 2); }
+    }
+    // Shelf fungus on the side.
+    for (let k = 0; k < 2 + (w > 50 ? 1 : 0); k++) {
+      const fy = faceH + 6 + Math.floor(r() * (h - faceH - flare - 8));
+      const [, b] = edge[fy] || [pad, pad + w];
+      const fw = 5 + Math.floor(r() * 3), fx = b - 3;
+      x.fillStyle = C.line; x.fillRect(fx, fy, fw, 3);
+      x.fillStyle = "#e8d2a0"; x.fillRect(fx, fy, fw - 1, 1);
+      x.fillStyle = "#b08a58"; x.fillRect(fx, fy + 1, fw - 2, 1);
+    }
+    // The cut face: an oval of pale wood with rings, a crack and splinters.
     const cx = pad + w / 2, rx = w / 2, ry = faceH / 2;
     for (let y = 0; y < faceH + 1; y++) {
       const dy = (y - ry) / (ry + 0.5);
@@ -570,13 +691,17 @@
       x.fillStyle = C.faceDark; x.fillRect(Math.round(cx + half * 0.3), y, Math.max(0, Math.round(half * 0.6) - 1), 1);
     }
     x.fillStyle = C.ring;
-    for (const f of [0.75, 0.5, 0.28]) {
-      const hw = Math.round(rx * f);
-      x.fillRect(Math.round(cx - hw), Math.round(ry), 1, 1); x.fillRect(Math.round(cx + hw), Math.round(ry), 1, 1);
-      x.fillRect(Math.round(cx - hw * 0.7), Math.max(1, Math.round(ry - ry * f)), Math.round(hw * 1.4), 1);
+    for (const f of [0.82, 0.62, 0.42, 0.22]) {
+      const hw = Math.round(rx * f), hh = Math.max(1, Math.round(ry * f));
+      for (let k = 0; k <= 16; k++) {
+        const an = (k / 16) * Math.PI * 2;
+        x.fillRect(Math.round(cx + Math.cos(an) * hw), Math.round(ry + Math.sin(an) * hh), 1, 1);
+      }
     }
-    x.fillStyle = C.pith; x.fillRect(Math.round(cx), Math.round(ry), 1, 1);
-    x.fillStyle = C.dark; x.fillRect(Math.round(cx) + 1, Math.round(ry) + 1, Math.round(rx * 0.5), 1);
+    x.fillStyle = C.pith; x.fillRect(Math.round(cx) - 1, Math.round(ry), 2, 1);
+    x.fillStyle = C.line; x.fillRect(Math.round(cx) + 1, Math.round(ry), Math.round(rx * 0.6), 1);
+    // Bark lip around the face.
+    for (let px = Math.round(cx - rx); px < Math.round(cx + rx); px++) { x.fillStyle = C.dark; x.fillRect(px, faceH, 1, 1); }
     return c;
   }
 
@@ -599,6 +724,24 @@
     for (let i = 0; i < w / 3; i++) {
       x.fillStyle = r() < 0.6 ? C.moss : C.mossHi;
       x.fillRect(ew + Math.floor(r() * (w - ew - 3)), 1 + Math.floor(r() * 3), 2 + Math.floor(r() * 3), 1);
+    }
+    // Knots and a broken-off branch stub or two.
+    for (let k = 0; k < Math.max(1, Math.floor(w / 30)); k++) {
+      const kx = ew + 6 + Math.floor(r() * (w - ew - 14)), ky = 4 + Math.floor(r() * (h - 9));
+      x.fillStyle = C.line; x.fillRect(kx, ky, 4, 3);
+      x.fillStyle = C.dark; x.fillRect(kx + 1, ky + 1, 2, 1);
+      x.fillStyle = C.hi; x.fillRect(kx, ky - 1, 4, 1);
+    }
+    for (let k = 0; k < Math.floor(w / 40); k++) {
+      const kx = ew + 8 + Math.floor(r() * (w - ew - 18));
+      x.fillStyle = C.line; x.fillRect(kx, 0, 4, 2);
+      x.fillStyle = C.face; x.fillRect(kx + 1, 0, 2, 1);
+    }
+    // Shelf fungus along the lower side.
+    for (let k = 0; k < 2; k++) {
+      const fx = ew + 4 + Math.floor(r() * (w - ew - 12)), fy = h - 6 - Math.floor(r() * 3);
+      x.fillStyle = C.line; x.fillRect(fx, fy, 6, 2);
+      x.fillStyle = "#e8d2a0"; x.fillRect(fx, fy, 5, 1);
     }
     // Rough broken far end.
     for (let y = 1; y < h - 1; y++) {
@@ -744,16 +887,27 @@
   function placeAtX(x) { return PLACES[x >= g.bx ? g.place : g.prev]; }
 
   function hillAt(x) {
-    // Po-Koro's rolling hills: how far the sand rises above the floor at
-    // screen x. Eases in and out over 120 px at the edges of the stage.
-    if (placeAtX(x).key !== "po") { return 0; }
+    // How far the ground rises above the floor at screen x: Po-Koro's big
+    // rolling hills, a very slight roll in Onu, Ta, Le and Ko-Koro, flat
+    // water in Ga-Koro. Flattens out near pits and over 120 px either side
+    // of where one place changes to the next.
+    const key = placeAtX(x).key;
+    if (key === "ga") { return 0; }
     let ease = 1;
-    if (g.bx > -1e8) {
-      ease = PLACES[g.place].key === "po" ? (x - g.bx) / 120 : (g.bx - x) / 120;
-      ease = Math.max(0, Math.min(1, ease));
-    }
+    if (g.bx > -1e8) { ease = Math.min(1, Math.abs(x - g.bx) / 120); }
+    if (ease <= 0) { return 0; }
     const wx = x + g.scroll;
-    const h = 9 * (0.5 - 0.5 * Math.cos((2 * Math.PI * wx) / 300)) + 3 * (0.5 - 0.5 * Math.cos((2 * Math.PI * wx) / 110));
+    let h;
+    if (key === "po") {
+      h = 9 * (0.5 - 0.5 * Math.cos((2 * Math.PI * wx) / 300)) + 3 * (0.5 - 0.5 * Math.cos((2 * Math.PI * wx) / 110));
+    } else {
+      h = 2.2 * (0.5 - 0.5 * Math.cos((2 * Math.PI * wx) / 340)) + 0.8 * (0.5 - 0.5 * Math.cos((2 * Math.PI * wx) / 130));
+      for (const o of g.obstacles) {
+        if (o.kind !== "pit") { continue; }
+        const d = x < o.x ? o.x - x : x > o.x + o.w ? x - o.x - o.w : 0;
+        if (d < 24) { ease = Math.min(ease, d / 24); }
+      }
+    }
     return h * ease;
   }
 
@@ -774,7 +928,7 @@
     if (stump) { return top; }
     if (placeAtX(x).ground === "water") {
       for (const o of g.obstacles) {
-        if (o.kind === "leaf" && x > o.x + 4 && x < o.x + o.w - 4) { return bob(o); }
+        if (o.kind === "leaf" && x > o.x - 8 && x < o.x + o.w + 8) { return bob(o); }
       }
       return frozen() ? 0 : null;
     }
@@ -923,7 +1077,8 @@
       return {
         back: makeBack(P),
         ledges: LAYERS.map(L => (L.ground ? makeLedge(L, P) : null)),
-        top: makeTop(P), floor: makeFloor(P), swarm
+        top: makeTop(P), floor: makeFloor(P), swarm,
+        fringe: P.look === "forest" ? makeFringe(P) : null
       };
     });
   }
@@ -1031,7 +1186,7 @@
       // Land on top; roll into the side and it hurts.
       const img = kind === "log" ? makeLog(w, h, P.wood) : makeGiantStump(w, h, P.wood);
       const o = box(x, w, h, FLOOR - h, img, "stump");
-      o.drawX = kind === "log" ? 0 : -6;  // stumps' roots spread past the box
+      o.drawX = kind === "log" ? 0 : -STUMP_PAD;  // stumps' roots spread past the box
       return o;
     };
     const stoneAt = (x, w, h) => {
@@ -1074,19 +1229,19 @@
       // to clear from the ground (you can land on any of them).
       logStep: () => {
         let first;
-        if (Math.random() < 0.6) { const w = 44 + R(22), h = 16 + R(6); first = cutTree(x0, w, h, "log"); }
-        else { const w = 28 + R(6), h = 18 + R(6); first = cutTree(x0, w, h, "stump"); }
+        if (Math.random() < 0.6) { const w = 56 + R(26), h = 18 + R(6); first = cutTree(x0, w, h, "log"); }
+        else { const w = 34 + R(8), h = 20 + R(6); first = cutTree(x0, w, h, "stump"); }
         push(first);
         const gap = Math.max(26, Math.round(g.speed * 7) + R(20));
-        const gw = 40 + R(14), gh = 52 + R(6);
+        const gw = 52 + R(16), gh = 54 + R(6);
         push(cutTree(x0 + first.w + gap, gw, gh, "giant"));
         extra = first.w + gap + gw;
       },
-      log: () => { const w = 50 + R(30), h = 16 + R(6); push(cutTree(x0, w, h, "log")); extra = w; },
-      stump: () => { const w = 30 + R(10), h = 22 + R(8); push(cutTree(x0, w, h, "stump")); },
+      log: () => { const w = 62 + R(34), h = 18 + R(6); push(cutTree(x0, w, h, "log")); extra = w; },
+      stump: () => { const w = 36 + R(12), h = 26 + R(8); push(cutTree(x0, w, h, "stump")); },
       stumpRun: () => {
         // Two stumps: hop from one to the next.
-        const w1 = 28 + R(6), h1 = 18 + R(6), w2 = 30 + R(8), h2 = 24 + R(8), gap = 22 + R(16);
+        const w1 = 34 + R(6), h1 = 20 + R(6), w2 = 38 + R(10), h2 = 28 + R(8), gap = 24 + R(16);
         push(cutTree(x0, w1, h1, "stump"));
         push(cutTree(x0 + w1 + gap, w2, h2, "stump"));
         extra = w1 + gap + w2;
@@ -1520,14 +1675,26 @@
     const P = PLACES[pi], A = art[pi];
     if (A.top) { tile(A.top, s, 0); }
     tile(A.floor, s, FLOOR);
-    if (P.key === "po") {
-      // The hills: sand rising over the floor.
+    if (P.ground === "solid") {
+      // The hills: ground rising over the floor (big in Po-Koro, slight
+      // elsewhere).
       for (let x = 0; x < W; x++) {
+        if (placeAtX(x) !== P) { continue; }
         const hh = Math.round(hillAt(x));
         if (hh <= 0) { continue; }
-        ctx.fillStyle = P.floor[0]; ctx.fillRect(x, FLOOR - hh + 1, 1, hh);
+        ctx.fillStyle = P.key === "po" ? P.floor[0] : P.floor[2]; ctx.fillRect(x, FLOOR - hh + 1, 1, hh);
         ctx.fillStyle = P.floor[1]; ctx.fillRect(x, FLOOR - hh, 1, 1);
         ctx.fillStyle = P.floor[2]; ctx.fillRect(x, FLOOR - hh + 1, 1, 1);
+      }
+    }
+    if (A.fringe) {
+      // Le-Koro: grass tufts, flowers and mushrooms along the top of the
+      // ground, following the slight hills.
+      const o = Math.floor(wrap(s, A.fringe.width)), fh = A.fringe.height;
+      for (let x = 0; x < W; x++) {
+        if (placeAtX(x) !== P) { continue; }
+        const hh = Math.round(hillAt(x));
+        ctx.drawImage(A.fringe, (o + x) % A.fringe.width, 0, 1, fh, x, FLOOR - fh + 1 - hh, 1, fh);
       }
     }
     if (P.ground === "water") {
@@ -1752,21 +1919,60 @@
   }
 
   function drawWave() {
-    // Ga-Koro's tidal wave, rolling past in front of him.
+    // Ga-Koro's tidal wave rolling past in front of him: a deep blue body
+    // with light streaks, a curling lip of foam at the front, foam churning
+    // at its foot and spray flying off the crest.
     if (!g.wave || g.wave.x === undefined) { return; }
-    const front = g.wave.x, len = 170;
-    for (let x = Math.max(0, Math.floor(front - len)); x < Math.min(W, front); x++) {
-      const t = (x - (front - len)) / len;
-      const h = Math.round(46 * Math.pow(t, 1.4) + 2 * Math.sin(x * 0.2 + clock * 0.2));
-      if (h <= 0) { continue; }
-      ctx.globalAlpha = 0.55; ctx.fillStyle = "#2a7ad0"; ctx.fillRect(x, FLOOR - h, 1, h + 4);
-      ctx.globalAlpha = 0.8; ctx.fillStyle = "#8fd0ff"; ctx.fillRect(x, FLOOR - h, 1, 2);
-      if (t > 0.8 && Math.random() < 0.5) { ctx.fillStyle = "#ffffff"; ctx.fillRect(x, FLOOR - h - Math.floor(Math.random() * 3), 1, 1); }
+    const front = g.wave.x, len = 170, top = 56, lip = 18;
+    const hash = (a, b) => { const v = Math.sin(a * 12.9898 + b * 78.233) * 43758.5453; return v - Math.floor(v); };
+    const height = t => top * Math.pow(t, 1.5);
+    for (let x = Math.max(0, Math.floor(front - len)); x < Math.min(W, Math.ceil(front + lip)); x++) {
+      if (x < front) {
+        const t = (x - (front - len)) / len;
+        const h = Math.round(height(t) + 1.5 * Math.sin(x * 0.18 + clock * 0.25));
+        if (h <= 0) { continue; }
+        const y0 = FLOOR - h;
+        // Body, darker at the bottom, glassy lighter near the top.
+        ctx.globalAlpha = 0.82;
+        for (let y = y0; y < FLOOR + 4; y++) {
+          const d = (y - y0) / Math.max(1, h);
+          let col = d < 0.18 ? "#5cb8f0" : d < 0.45 ? "#2f8ad8" : d < 0.75 ? "#2068bc" : "#174e98";
+          // Diagonal light streaks running up the face.
+          if (((x + clock * 1.5 - y * 1.4) % 23 + 23) % 23 < 1.2 && d < 0.8) { col = "#8fd4ff"; }
+          // The dark hollow under the curl.
+          const k = (t - 0.8) / 0.2;
+          if (k > 0 && d > 0.1 && d < 0.1 + 0.5 * Math.sqrt(k)) { col = d < 0.1 + 0.5 * Math.sqrt(k) - 0.06 ? "#123e7c" : "#2068bc"; }
+          ctx.fillStyle = col; ctx.fillRect(x, y, 1, 1);
+        }
+        // Foam along the crest.
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = "#ffffff"; ctx.fillRect(x, y0, 1, 1);
+        ctx.fillStyle = "#cfeeff"; ctx.fillRect(x, y0 + 1, 1, t > 0.6 ? 2 : 1);
+        if (hash(x, Math.floor(clock / 3)) < 0.35 * t) { ctx.fillStyle = "#ffffff"; ctx.fillRect(x, y0 - 1, 1, 1); }
+      } else {
+        // The lip curling over in front, thinning as it falls.
+        const u = (x - front) / lip;
+        const y0 = Math.round(FLOOR - top - 1 + u * u * 26);
+        const th = Math.max(1, Math.round(7 * (1 - u)));
+        ctx.globalAlpha = 0.9;
+        ctx.fillStyle = "#5cb8f0"; ctx.fillRect(x, y0, 1, th + 2);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = "#ffffff"; ctx.fillRect(x, y0, 1, Math.max(1, th - 2));
+        ctx.fillStyle = "#cfeeff"; ctx.fillRect(x, y0 + Math.max(1, th - 2), 1, 2);
+      }
+      // Foam churning at the foot.
+      const fx = x - front;
+      if (fx > -60 && hash(x, Math.floor(clock / 2)) < 0.7) {
+        ctx.fillStyle = hash(x + 3, clock) < 0.5 ? "#ffffff" : "#cfeeff";
+        ctx.fillRect(x, FLOOR - 1 - Math.floor(hash(x, clock) * 5), 1, 2);
+      }
     }
     ctx.globalAlpha = 1;
-    if (front > 0 && front < W && Math.random() < 0.6) {
-      g.dust.push({ x: front - Math.random() * 10, y: FLOOR - 44 - Math.random() * 6, vx: -1 - Math.random() * 2,
-        vy: 0.5 + Math.random(), life: 14, col: "#ffffff", col2: "#bfe6ff" });
+    if (front > 0 && front < W + lip) {
+      for (let k = 0; k < 2; k++) {
+        g.dust.push({ x: front + Math.random() * lip, y: FLOOR - top - 2 - Math.random() * 6, vx: -0.5 - Math.random() * 2,
+          vy: 0.6 + Math.random() * 1.2, life: 12 + Math.floor(Math.random() * 8), col: "#ffffff", col2: "#bfe6ff" });
+      }
     }
   }
 
@@ -1806,12 +2012,23 @@
     if (html !== hudKey) { hud.innerHTML = html; hudKey = html; }
   }
 
+  let frameAvg = TICK_MS;
+
   function frame(t) {
     if (!running) { return; }
     if (!lastTime) { lastTime = t; }
-    acc += Math.min(250, t - lastTime);
+    const dt = Math.min(250, t - lastTime);
     lastTime = t;
-    while (acc >= TICK_MS) { update(); acc -= TICK_MS; }
+    if (dt > 0) { frameAvg += (dt - frameAvg) * 0.05; }
+    if (Math.abs(frameAvg - TICK_MS) < 1.5 && dt > TICK_MS * 0.4 && dt < TICK_MS * 1.6) {
+      // 60 Hz screen: exactly one step per frame. Counting time instead
+      // sometimes gave two steps in one frame (e.g. when a key press made a
+      // frame a little late), which looked like a jitter forward.
+      update(); acc = 0;
+    } else {
+      acc += dt;
+      while (acc >= TICK_MS) { update(); acc -= TICK_MS; }
+    }
     render();
     raf = requestAnimationFrame(frame);
   }
@@ -1914,6 +2131,8 @@
   }
 
   function show() {
+    // Let go of the Open button, so Space can't press it again.
+    if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); }
     if (!overlay) { build(); }
     overlay.style.display = "flex";
     fit();
