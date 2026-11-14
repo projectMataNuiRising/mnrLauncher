@@ -619,7 +619,7 @@
     const pad = STUMP_PAD, cw = w + pad * 2;
     const [c, x] = canvas(cw, h);
     const r = rng(w * 13 + h * 7);
-    const faceH = Math.max(5, Math.round(w * 0.2));
+    const faceH = Math.max(5, Math.min(10, Math.round(w * 0.2)));
     const flare = Math.min(16, Math.round(h * 0.32));
     const edge = [];
     for (let y = Math.floor(faceH / 2); y < h; y++) {
@@ -1226,18 +1226,12 @@
         push(stoneAt(x0, w1, h1));
         push(stoneAt(x0 + w1 + 6 + R(8), w2, h2));
       },
-      // Le-Koro: giant cut-down trees. The gimmick: hop onto a fallen
-      // log or a low stump, then jump from it over a giant stump too tall
-      // to clear from the ground (you can land on any of them).
+      // Le-Koro: giant cut-down trees, wide and low enough to land on
+      // with one jump (rolling into the side still hurts).
       logStep: () => {
-        let first;
-        if (Math.random() < 0.6) { const w = 56 + R(26), h = 18 + R(6); first = cutTree(x0, w, h, "log"); }
-        else { const w = 34 + R(8), h = 20 + R(6); first = cutTree(x0, w, h, "stump"); }
-        push(first);
-        const gap = Math.max(26, Math.round(g.speed * 7) + R(20));
-        const gw = 52 + R(16), gh = 54 + R(6);
-        push(cutTree(x0 + first.w + gap, gw, gh, "giant"));
-        extra = first.w + gap + gw;
+        const w = 100 + R(36), h = 30 + R(6);
+        push(cutTree(x0, w, h, "giant"));
+        extra = w;
       },
       log: () => { const w = 62 + R(34), h = 18 + R(6); push(cutTree(x0, w, h, "log")); extra = w; },
       stump: () => { const w = 36 + R(12), h = 26 + R(8); push(cutTree(x0, w, h, "stump")); },
