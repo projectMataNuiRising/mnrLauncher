@@ -20,6 +20,13 @@
    Tap for a short hop, hold for a big jump. Things hanging from above
    sit where a hop passes under them and a big jump does not.
 
+   Powers (hover a box to read them): black 4 hearts; red 1 heart and a
+   fire shield that blocks a hit and comes back every 2 places; green 2
+   hearts and a double jump; blue 2 hearts and a tidal wave now and then
+   (1 in 8 every 100 points, for 250 points) that rolls past and smashes
+   things; brown 2 hearts and smashes through half of what it hits; white
+   2 hearts, freezes lava and water to roll across, icy trail.
+
    Colours: you start black (Onu-Koro). Reaching a place unlocks its
    colour; pick it with Left / Right before a run. The swarm of buddies
    racing on the ledges behind takes each place's colours as they come
@@ -49,7 +56,17 @@
   const BALL_X = 56;                 // x of the ball's centre
   const BALL_R = 20.5;               // ball radius (b_03 is 41 px wide)
   const HIT_R = 16;                  // a little forgiving
-  const LIVES = 3;                   // hits (or dips in lava / water) per run
+  // Each colour's power. lives: hearts per run.
+  const POWERS = {
+    onu: { lives: 4, text: "4 hearts." },
+    ta: { lives: 1, shield: true, text: "1 heart and a fire shield that blocks one hit. It comes back every 2 places." },
+    po: { lives: 2, text: "2 hearts. Half the time he smashes straight through what he hits (not pits)." },
+    ga: { lives: 2, text: "2 hearts. Now and then a tidal wave rolls past him and smashes everything in its way." },
+    le: { lives: 2, text: "2 hearts and a double jump." },
+    ko: { lives: 2, text: "2 hearts. Freezes lava and water ahead of him and rolls right across, leaving an icy trail." }
+  };
+  const WAVE_CHANCE = 1 / 8;         // Ga-Koro: chance of a wave every 100 points...
+  const WAVE_POINTS = 250;           // ...lasting a quarter of a place
   const SAFE_TICKS = 100;            // flashing white after one
   const TICK_MS = 1000 / 60;
   const HOLD = 2;                    // ticks each sprite is shown
@@ -740,6 +757,13 @@
     return h * ease;
   }
 
+  function frozen() { return g && g.power === "ko"; }
+
+  function leafAt(x) {
+    for (const o of g.obstacles) { if (o.kind === "leaf" && x > o.x && x < o.x + o.w) { return true; } }
+    return false;
+  }
+
   function supportAt(x) {
     // Height above the floor that holds the ball up at x: a stump's top,
     // the ground (or a hill), or null over lava or open water.
@@ -752,10 +776,10 @@
       for (const o of g.obstacles) {
         if (o.kind === "leaf" && x > o.x + 4 && x < o.x + o.w - 4) { return bob(o); }
       }
-      return null;
+      return frozen() ? 0 : null;
     }
     for (const o of g.obstacles) {
-      if (o.kind === "pit" && x > o.x + 6 && x < o.x + o.w - 6) { return null; }
+      if (o.kind === "pit" && x > o.x + 6 && x < o.x + o.w - 6) { return frozen() ? top : null; }
     }
     return top;
   }
@@ -825,7 +849,11 @@
       newBest: false,
       fallInto: "",
       knock: null,           // knocked out of the ball: { x, y, vx, vy, a }
-      lives: LIVES, invuln: 0,   // invuln: ticks left flashing white (can't be hurt)
+      power: save.color,         // whose power this run has
+      lives: POWERS[save.color].lives, invuln: 0,   // invuln: ticks left flashing white
+      shield: !!POWERS[save.color].shield, placesPassed: 0,
+      doubleUsed: false, wave: null, nextWaveRoll: 100,
+      ice: [], iceEnd: -1e9, trail: [],
       dust: [], embers: [], snow: [], shards: [],
       place: 0, prev: 0, bx: -1e9, mouth: false, banner: 0, unlockBanner: 0, unlockKey: ""
     };
@@ -948,7 +976,17 @@
       if (g.deadTick > 30) { reset("ready"); }
       return;
     }
-    if (g.state === "roll" && onSurface()) { g.vy = JUMP_V; g.air = 0; g.y += 0.01; g.grounded = false; }
+    if (g.state !== "roll") { return; }
+    if (onSurface()) { g.vy = JUMP_V; g.air = 0; g.y += 0.01; g.grounded = false; return; }
+    if (g.power === "le" && !g.doubleUsed) {
+      // Le-Koro: a second jump in the air, with a puff of air under him.
+      g.vy = JUMP_V * 0.95; g.air = 0; g.doubleUsed = true; g.grounded = false;
+      for (let i = 0; i < 16; i++) {
+        const side = i % 2 ? 1 : -1;
+        g.dust.push({ x: BALL_X + side * (4 + Math.random() * 10), y: FLOOR - g.y + 1, vx: -side * (0.6 + Math.random()) + g.speed * 0.3,
+          vy: -0.3 - Math.random() * 0.5, life: 12 + Math.floor(Math.random() * 8), col: "#f4fff4", col2: "#a8e0b4" });
+      }
+    }
   }
 
   function addLeaf(first) {
@@ -1082,6 +1120,8 @@
     }
     g.prev = from; g.place = to;
     g.bx = W + 8;
+    g.placesPassed++;
+    if (POWERS[g.power].shield && g.placesPassed % 2 === 0 && !g.shield) { g.shield = true; popShield(); }
     g.mouth = PLACES[from].cave !== PLACES[to].cave;
     g.banner = 150;
     g.untilNext = Math.max(g.untilNext, 40);
@@ -1129,8 +1169,23 @@
     if (i >= 0) { g.obstacles.splice(i, 1); }
   }
 
+  function smash(o) { if (o.kind === "crack") { shatter(o); } else { burst(o); } }
+
+  function popShield() {
+    // A ring of sparks: the shield coming on or breaking.
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * 6.28;
+      g.dust.push({ x: BALL_X + Math.cos(a) * 24, y: FLOOR - BALL_R - g.y + Math.sin(a) * 24,
+        vx: -Math.cos(a) * 1.5, vy: -Math.sin(a) * 1.5, life: 14, col: "#ffe080", col2: "#ff8a30" });
+    }
+  }
+
   function hurt(o) {
-    // Lose a life and flash white, or with the last one, game over.
+    // Po-Koro smashes through half the time; Ta-Koro's shield takes one
+    // hit. Otherwise lose a life and flash white, or with the last one,
+    // game over.
+    if (g.power === "po" && Math.random() < 0.5) { smash(o); g.score += 10; return false; }
+    if (g.shield) { g.shield = false; g.invuln = SAFE_TICKS; smash(o); popShield(); return false; }
     if (g.lives > 1) {
       g.lives--;
       g.invuln = SAFE_TICKS;
@@ -1151,6 +1206,47 @@
     }
     g.obstacles.splice(g.obstacles.indexOf(o), 1);
     g.score += 25;
+  }
+
+  function powers() {
+    // Ga-Koro: roll for a tidal wave every 100 points; it rolls slowly
+    // past from behind and smashes whatever it reaches.
+    if (g.power === "ga") {
+      while (g.score >= g.nextWaveRoll) {
+        g.nextWaveRoll += 100;
+        if (!g.wave && Math.random() < WAVE_CHANCE) { g.wave = { until: g.score + WAVE_POINTS }; }
+      }
+      if (g.wave) {
+        const t = 1 - (g.wave.until - g.score) / WAVE_POINTS;
+        g.wave.x = -60 + t * (W + 240);
+        for (const o of g.obstacles.slice()) {
+          if (o.kind === "pit" || o.kind === "leaf") { continue; }
+          if (o.x < g.wave.x && o.x + o.w > g.wave.x - 170) { smash(o); g.score += 10; }
+        }
+        if (g.score >= g.wave.until) { g.wave = null; }
+      }
+    }
+    // Ko-Koro: ice over pits and water a little ahead, and a trail behind.
+    if (g.power === "ko") {
+      for (const o of g.obstacles) {
+        if (o.kind === "pit" && !o.iced && o.x < BALL_X + 110) {
+          o.iced = true;
+          for (let i = 0; i < 12; i++) {
+            g.dust.push({ x: o.x + Math.random() * o.w, y: FLOOR, vx: g.speed * 0.2, vy: 0.5 + Math.random(),
+              life: 14, col: "#ffffff", col2: "#9cdcff" });
+          }
+        }
+      }
+      for (let x = Math.max(g.iceEnd, BALL_X - 30); x < BALL_X + 110; x += 3) {
+        if (placeAtX(x).ground !== "water" || leafAt(x)) { continue; }
+        const last = g.ice[g.ice.length - 1];
+        if (last && last.x + last.w >= x - 3) { last.w = x + 3 - last.x; } else { g.ice.push({ x, w: 3 }); }
+      }
+      g.iceEnd = BALL_X + 110;
+      if (onSurface()) {
+        g.trail.push({ x: BALL_X - 12 + Math.random() * 6, y: FLOOR - g.y, life: 80 });
+      }
+    }
   }
 
   function update() {
@@ -1202,6 +1298,11 @@
     for (const o of g.obstacles) { o.x -= g.speed; }
     g.obstacles = g.obstacles.filter(o => o.x + o.w > -4);
     g.leafEnd -= g.speed;
+    for (const c of g.ice) { c.x -= g.speed; }
+    g.ice = g.ice.filter(c => c.x + c.w > -4);
+    g.iceEnd -= g.speed;
+    for (const t of g.trail) { t.x -= g.speed; t.life--; }
+    g.trail = g.trail.filter(t => t.life > 0 && t.x > -4);
     if (g.bx > -1e8) {
       g.bx -= g.speed;
       if (g.bx < -80) { g.bx = -1e9; g.prev = g.place; }
@@ -1218,10 +1319,13 @@
     if (g.state === "fall") {
       g.vy -= GRAVITY;
       g.y += g.vy;
-      if (g.y < -14 && (g.lives > 1 || g.invuln > 0)) {
-        // Bounce back out, flashing white (a life gone, unless still
-        // flashing from the last one).
-        if (g.invuln <= 0) { g.lives--; g.invuln = SAFE_TICKS; g.rollTicks = 0; }
+      if (g.y < -14 && (g.lives > 1 || g.invuln > 0 || g.shield)) {
+        // Bounce back out, flashing white (the shield or a life gone,
+        // unless still flashing from the last one).
+        if (g.invuln <= 0) {
+          if (g.shield) { g.shield = false; popShield(); } else { g.lives--; g.rollTicks = 0; }
+          g.invuln = SAFE_TICKS;
+        }
         g.state = "roll"; g.vy = 6.8; g.air = BOOST_TICKS; g.grounded = false;
         const hot = g.fallInto !== "water";
         for (let i = 0; i < 16; i++) {
@@ -1239,6 +1343,7 @@
     const p = placeAt(g.score);
     if (p !== g.place) { changePlace(p); }
     if (place().ground === "water") { while (g.leafEnd < W + 80) { addLeaf(false); } }
+    powers();
 
     // Moving up and down: in the air unless sitting on something.
     // Holding the key keeps a jump floaty; a tap is a short hop.
@@ -1246,7 +1351,7 @@
     const sup = supportAt(BALL_X);
     let dropped = false;
     if (g.vy <= 0 && sup !== null && g.y <= sup + (g.grounded ? 8 : 0.5)) {
-      g.y = sup; g.vy = 0; g.grounded = true;
+      g.y = sup; g.vy = 0; g.grounded = true; g.doubleUsed = false;
     } else {
       g.grounded = false;
       g.y += g.vy;
@@ -1254,7 +1359,7 @@
       g.vy -= GRAVITY;
       if (keyHeld && g.air <= BOOST_TICKS && g.vy > 0) { g.vy += BOOST; }
       const now = supportAt(BALL_X);
-      if (g.vy <= 0 && now !== null && g.y <= now) { g.y = now; g.vy = 0; g.grounded = true; }
+      if (g.vy <= 0 && now !== null && g.y <= now) { g.y = now; g.vy = 0; g.grounded = true; g.doubleUsed = false; }
       else if (now === null && g.y <= 0 && g.vy <= 0) { dropped = true; }
     }
     if (dropped) {
@@ -1457,9 +1562,26 @@
     ctx.fillStyle = PLACES[o.place].rim;
     ctx.fillRect(x - 2, FLOOR, 2, 4); ctx.fillRect(x + w, FLOOR, 2, 4);
     ctx.fillRect(x - 4, FLOOR, 2, 1); ctx.fillRect(x + w + 2, FLOOR, 2, 1);
+    if (o.iced) { drawIce(x - 3, w + 6); }
+  }
+
+  function drawIce(x, w) {
+    // A slab of ice to roll across (Ko-Koro's power).
+    ctx.fillStyle = "#1c3c60"; ctx.fillRect(x, FLOOR - 1, w, 6);
+    ctx.fillStyle = "#b8e8ff"; ctx.fillRect(x, FLOOR - 1, w, 5);
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(x, FLOOR - 1, w, 1);
+    ctx.fillStyle = "#7ab8e0";
+    for (let px = 5; px < w - 3; px += 9) { ctx.fillRect(x + px, FLOOR + 1, 3, 1); ctx.fillRect(x + px + 2, FLOOR + 2, 2, 1); }
   }
 
   function drawObstacles() {
+    for (const c of g.ice) { drawIce(Math.round(c.x), Math.round(c.w)); }
+    for (const t of g.trail) {
+      ctx.globalAlpha = t.life / 80;
+      ctx.fillStyle = "#dff4ff"; ctx.fillRect(Math.round(t.x), Math.round(t.y) - 1, 3, 1);
+      ctx.fillStyle = "#9cdcff"; ctx.fillRect(Math.round(t.x) + 1, Math.round(t.y), 2, 1);
+    }
+    ctx.globalAlpha = 1;
     for (const o of g.obstacles) {
       const x = Math.round(o.x);
       if (o.kind === "pit") { drawPit(o); }
@@ -1536,6 +1658,8 @@
       ctx.restore();
     }
     ctx.filter = "none";
+    drawShield();
+    drawWave();
 
     for (const sh of g.shards) { ctx.fillStyle = sh.col; ctx.fillRect(Math.round(sh.x), Math.round(sh.y), 2, 2); }
     for (const f of g.snow) { ctx.fillStyle = "#ffffff"; ctx.fillRect(Math.round(f.x), Math.round(f.y), 1, 1); }
@@ -1576,19 +1700,64 @@
     }
   }
 
+  const HEART = [".XX.XX.", "XXXXXXX", "XXXXXXX", ".XXXXX.", "..XXX..", "...X..."];
+
   function drawLives() {
-    // One little ball per life left, top left.
-    const img = spriteOf(save.color, "b_03_01");
-    for (let i = 0; i < LIVES; i++) {
-      ctx.save();
-      if (i >= g.lives) { ctx.filter = "brightness(0.25)"; ctx.globalAlpha = 0.6; }
-      ctx.drawImage(img, 4 + i * 15, 3, 16, 16);
-      ctx.restore();
+    // Hearts top left (full or empty), and a shield if Ta-Koro has one.
+    const n = POWERS[g.power].lives;
+    for (let i = 0; i < n; i++) {
+      const full = i < g.lives, x0 = 5 + i * 10, y0 = 5;
+      for (let y = 0; y < HEART.length; y++) {
+        for (let x = 0; x < 7; x++) {
+          if (HEART[y][x] !== "X") { continue; }
+          ctx.fillStyle = full ? (x === 1 && y === 1 ? "#ffb0b0" : "#e83a3a") : "#3a2a30";
+          ctx.fillRect(x0 + x, y0 + y, 1, 1);
+        }
+      }
+    }
+    if (g.shield) {
+      const x0 = 7 + n * 10, y0 = 4;
+      ctx.fillStyle = "#7a3a10"; ctx.fillRect(x0, y0, 7, 5); ctx.fillRect(x0 + 1, y0 + 5, 5, 2); ctx.fillRect(x0 + 2, y0 + 7, 3, 1);
+      ctx.fillStyle = "#ffb040"; ctx.fillRect(x0 + 1, y0 + 1, 5, 4); ctx.fillRect(x0 + 2, y0 + 5, 3, 1);
+      ctx.fillStyle = "#ffe8a0"; ctx.fillRect(x0 + 1, y0 + 1, 2, 1);
+    }
+  }
+
+  function drawShield() {
+    // Ta-Koro's fire shield: a shimmering ring around him.
+    if (!g.shield || g.state === "dead") { return; }
+    const standing = g.state === "idle" || g.state === "ready" || g.state === "hop";
+    const cx = BALL_X, cy = standing ? FLOOR - 32 : Math.round(FLOOR - BALL_R - g.y), r = standing ? 30 : 25;
+    ctx.globalAlpha = 0.14; disc(ctx, cx, cy, r, "#ff9a30"); ctx.globalAlpha = 0.85;
+    for (let i = 0; i < 64; i++) {
+      const a = (i / 64) * 6.28 + clock * 0.03;
+      ctx.fillStyle = (i + Math.floor(clock / 4)) % 8 < 4 ? "#ffb040" : "#ffe890";
+      ctx.fillRect(Math.round(cx + Math.cos(a) * r), Math.round(cy + Math.sin(a) * r), 1, 1);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawWave() {
+    // Ga-Koro's tidal wave, rolling past in front of him.
+    if (!g.wave || g.wave.x === undefined) { return; }
+    const front = g.wave.x, len = 170;
+    for (let x = Math.max(0, Math.floor(front - len)); x < Math.min(W, front); x++) {
+      const t = (x - (front - len)) / len;
+      const h = Math.round(46 * Math.pow(t, 1.4) + 2 * Math.sin(x * 0.2 + clock * 0.2));
+      if (h <= 0) { continue; }
+      ctx.globalAlpha = 0.55; ctx.fillStyle = "#2a7ad0"; ctx.fillRect(x, FLOOR - h, 1, h + 4);
+      ctx.globalAlpha = 0.8; ctx.fillStyle = "#8fd0ff"; ctx.fillRect(x, FLOOR - h, 1, 2);
+      if (t > 0.8 && Math.random() < 0.5) { ctx.fillStyle = "#ffffff"; ctx.fillRect(x, FLOOR - h - Math.floor(Math.random() * 3), 1, 1); }
+    }
+    ctx.globalAlpha = 1;
+    if (front > 0 && front < W && Math.random() < 0.6) {
+      g.dust.push({ x: front - Math.random() * 10, y: FLOOR - 44 - Math.random() * 6, vx: -1 - Math.random() * 2,
+        vy: 0.5 + Math.random(), life: 14, col: "#ffffff", col2: "#bfe6ff" });
     }
   }
 
   // -- Words: Bionicle-style lettering over the game (HTML) -------------------
-  let hud = null, hudKey = "";
+  let hud = null, hudKey = "", hoverKey = null;
 
   function hudHtml() {
     const P = place();
@@ -1597,6 +1766,9 @@
     out.push('<div class="cr-score">Best ' + Math.floor(save.best) + '<span>' + Math.floor(g.score) + "</span></div>");
     const pick = () => {
       if (unlocked().length > 1) { line("cr-small", "&#8249;&ensp;" + placeByKey(save.color).name + "&ensp;&#8250;", 54); }
+      const k = hoverKey || save.color, open = save.unlocked.indexOf(k) >= 0;
+      line("cr-small cr-power", "<span>" + placeByKey(k).name + " &middot; " +
+        (open ? POWERS[k].text : "Locked: reach " + placeByKey(k).name + " to unlock. " + POWERS[k].text) + "</span>", 87);
     };
     if (g.state === "idle") {
       line("cr-title cr-long", "Unleash the Swarm", 11);
@@ -1662,6 +1834,8 @@
       text-shadow: 0 calc(var(--s) * 0.6) 0 #000, 0 0 calc(var(--s) * 2) rgba(0,0,0,0.8); }
     #cave-roll .cr-score span { color: #fff2c8; margin-left: calc(var(--s) * 8); }
     #cave-roll .cr-long { font-size: calc(var(--s) * 14); }
+    #cave-roll .cr-power span { background: rgba(8,6,12,0.6); padding: calc(var(--s) * 1) calc(var(--s) * 4);
+      border-radius: calc(var(--s) * 2); font-size: calc(var(--s) * 4.6); white-space: normal; display: inline-block; max-width: 92%; }
     #cave-roll .cr-blink { animation: cr-blink 1s steps(2, start) infinite; }
     @keyframes cr-blink { to { visibility: hidden; } }
   `;
@@ -1712,7 +1886,16 @@
       keyHeld = true; jumpPressed();
     });
     view.addEventListener("pointerup", () => { keyHeld = false; });
-    view.addEventListener("pointerleave", () => { keyHeld = false; });
+    view.addEventListener("pointerleave", () => { keyHeld = false; hoverKey = null; });
+    view.addEventListener("pointermove", e => {
+      // Hovering a box shows that colour's power.
+      const r = view.getBoundingClientRect();
+      const px = (e.clientX - r.left) / (r.width / W), py = (e.clientY - r.top) / (r.height / H);
+      hoverKey = null;
+      for (const b of pickerBoxes()) {
+        if (px >= b.x && px < b.x + b.w && py >= b.y && py < b.y + b.h) { hoverKey = b.key; }
+      }
+    });
     window.addEventListener("resize", () => { if (running) { fit(); } });
   }
 
