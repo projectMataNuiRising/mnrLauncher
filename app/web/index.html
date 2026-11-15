@@ -326,6 +326,12 @@
           <span class="tile-label">Frames to MP4</span>
           <span id="ffmpeg-tile-badge" class="tile-badge">Checking...</span>
         </button>
+        <button class="tile" data-tool="imageinfo" id="imageinfo-tile">
+          <span class="tile-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/><circle cx="17.5" cy="17.5" r="3.5" fill="var(--panel)"/><path d="M17.5 16.5v.01"/><path d="M17.5 18v1.2"/></svg>
+          </span>
+          <span class="tile-label">Image Inspector</span>
+        </button>
         <button class="tile" data-tool="pcloud-cache" id="pcloud-cache-tile">
           <span class="tile-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/><path d="M12 12v4"/><path d="M10 14h4"/></svg>
@@ -544,6 +550,37 @@
         <div id="archive-tree-root" class="tree-root"></div>
       </div>
 
+    </div>
+  </div>
+
+  <!-- Image Inspector tool -->
+  <div id="imageinfo-screen" class="screen smanim-screen hidden">
+    <div class="ii-page">
+      <div class="ii-top">
+        <button id="imageinfo-back" class="back-button">
+          <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M11 18l-6-6 6-6"/></svg></span>
+          Home
+        </button>
+        <div class="ii-title">Image Inspector</div>
+        <button id="imageinfo-copy" class="small-button hidden" type="button">Copy all</button>
+      </div>
+      <div id="imageinfo-drop" class="drop-zone ii-drop" tabindex="0">
+        <div class="drop-zone-title">Drop an image here</div>
+        <div>or click to browse &middot; EXR, TIFF, JPEG, PNG, camera RAW, HEIC, video</div>
+      </div>
+      <div id="imageinfo-status" class="next-note"></div>
+      <div id="imageinfo-result" class="ii-result hidden">
+        <div class="ii-head">
+          <div id="imageinfo-thumb" class="ii-thumb"></div>
+          <div class="ii-head-text">
+            <div id="imageinfo-name" class="ii-name"></div>
+            <div id="imageinfo-path" class="ii-path"></div>
+            <div id="imageinfo-cards" class="ii-cards"></div>
+          </div>
+        </div>
+        <div id="imageinfo-warnings"></div>
+        <div id="imageinfo-sections"></div>
+      </div>
     </div>
   </div>
 

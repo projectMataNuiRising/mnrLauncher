@@ -63,6 +63,14 @@ except Exception as _colorspace_error:
     HAS_COLORSPACE = False
     print(f"[mnr] colour-space support unavailable: {_colorspace_error}")
 
+# imageinfo.py: the Image Inspector tool. Same safety net, a broken
+# file only costs that one tool.
+try:
+    import imageinfo
+except Exception as _imageinfo_error:
+    imageinfo = None
+    print(f"[mnr] image inspector unavailable: {_imageinfo_error}")
+
 APP_NAME = "MNR Launcher"
 APP_VERSION = "0.1.0-stage1"
 
@@ -3425,6 +3433,37 @@ class MnrApi:
                 }
 
         return result
+
+    # ---------------------------------------------------------- Image Inspector
+
+    def inspect_image(self, path):
+        """Everything a dropped image (or video) says about itself."""
+        if imageinfo is None:
+            return {"ok": False, "detail": "The Image Inspector failed to load, see the debug log."}
+        ffmpeg = ffprobe = None
+        try:
+            paths = _resolve_ffmpeg_paths()
+            if paths:
+                ffmpeg, ffprobe = paths.get("exe_path"), paths.get("probe_path")
+        except Exception:
+            pass
+        try:
+            result = imageinfo.inspect(path, ffmpeg=ffmpeg, ffprobe=ffprobe)
+            _log(f"image inspector: {os.path.basename(path)} -> {result.get('format')}")
+            return result
+        except Exception as e:
+            _log(f"image inspector failed on {path}: {e}")
+            return {"ok": False, "detail": f"Could not read this file: {e}"}
+
+    def browse_for_image(self):
+        """File picker for the Image Inspector. Returns the path or None."""
+        try:
+            result = webview.windows[0].create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False)
+        except Exception as e:
+            return {"ok": False, "detail": str(e)}
+        if not result:
+            return {"ok": True, "cancelled": True}
+        return {"ok": True, "path": result[0]}
 
     def get_colorspace_options(self):
         """

@@ -12,6 +12,7 @@ const screens = {
   smanim: document.getElementById("smanim-screen"),
   archive: document.getElementById("archive-screen"),
   ffmpeg: document.getElementById("ffmpeg-screen"),
+  imageinfo: document.getElementById("imageinfo-screen"),
 };
 
 const topbar = document.getElementById("topbar");
@@ -403,6 +404,8 @@ document.querySelectorAll(".tile").forEach(tile => {
     } else if (tool === "ffmpeg") {
       showScreen("ffmpeg");
       initFfmpegScreen();
+    } else if (tool === "imageinfo") {
+      showScreen("imageinfo");
     }
   });
 });
@@ -4078,3 +4081,126 @@ async function handleParsecClick() {
     showToast(r.detail, 6000);
   }
 }
+
+
+// ---------------------------------------------------------------
+// Image Inspector: drop (or browse for) one image and show everything
+// it says about itself. All the reading happens in imageinfo.py.
+// ---------------------------------------------------------------
+
+const iiDrop = document.getElementById("imageinfo-drop");
+const iiStatus = document.getElementById("imageinfo-status");
+const iiResult = document.getElementById("imageinfo-result");
+const iiCopy = document.getElementById("imageinfo-copy");
+let iiLast = null;
+
+document.getElementById("imageinfo-back").addEventListener("click", () => showScreen("home"));
+
+function iiEl(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text !== undefined && text !== null) el.textContent = text;
+  return el;
+}
+
+async function iiInspect(path) {
+  if (!path) return;
+  iiDrop.classList.remove("drag-over");
+  iiStatus.textContent = "Reading " + path.replace(/^.*[\\/]/, "") + "...";
+  iiResult.classList.add("hidden");
+  iiCopy.classList.add("hidden");
+  let r;
+  try {
+    r = await window.pywebview.api.inspect_image(path);
+  } catch (e) {
+    r = { ok: false, detail: String(e) };
+  }
+  if (!r || !r.ok) {
+    iiStatus.textContent = (r && r.detail) || "Could not read this file.";
+    return;
+  }
+  iiStatus.textContent = "";
+  iiLast = r;
+  iiRender(r);
+}
+
+function iiRender(r) {
+  document.getElementById("imageinfo-name").textContent = r.name;
+  document.getElementById("imageinfo-path").textContent = r.path;
+
+  const thumb = document.getElementById("imageinfo-thumb");
+  thumb.innerHTML = "";
+  if (r.thumb) {
+    const img = document.createElement("img");
+    img.src = r.thumb;
+    thumb.appendChild(img);
+  } else {
+    thumb.textContent = "No preview for this file";
+  }
+
+  const cards = document.getElementById("imageinfo-cards");
+  cards.innerHTML = "";
+  (r.summary || []).forEach(c => {
+    const card = iiEl("div", "ii-card" + (c.key ? " key" : ""));
+    card.appendChild(iiEl("div", "ii-card-label", c.label));
+    card.appendChild(iiEl("div", "ii-card-value", c.value));
+    if (c.note) card.appendChild(iiEl("div", "ii-card-note", c.note));
+    cards.appendChild(card);
+  });
+
+  const warns = document.getElementById("imageinfo-warnings");
+  warns.innerHTML = "";
+  (r.warnings || []).forEach(w => warns.appendChild(iiEl("div", "ii-warn", w)));
+
+  const secs = document.getElementById("imageinfo-sections");
+  secs.innerHTML = "";
+  (r.sections || []).forEach((s, i) => {
+    const d = iiEl("details", "ii-section");
+    if (i < 2) d.open = true;
+    const sum = iiEl("summary", null, s.title);
+    sum.appendChild(iiEl("span", null, s.rows.length + (s.rows.length === 1 ? " item" : " items")));
+    d.appendChild(sum);
+    const table = iiEl("table", "ii-table");
+    s.rows.forEach(([k, v]) => {
+      const tr = document.createElement("tr");
+      tr.appendChild(iiEl("td", null, k));
+      tr.appendChild(iiEl("td", null, v));
+      table.appendChild(tr);
+    });
+    d.appendChild(table);
+    secs.appendChild(d);
+  });
+
+  iiResult.classList.remove("hidden");
+  iiCopy.classList.remove("hidden");
+}
+
+function iiAsText(r) {
+  const lines = [r.name, r.path, ""];
+  (r.summary || []).forEach(c => lines.push(c.label + ": " + c.value + (c.note ? "  (" + c.note + ")" : "")));
+  (r.sections || []).forEach(s => {
+    lines.push("", "[" + s.title + "]");
+    s.rows.forEach(([k, v]) => lines.push(k + ": " + v));
+  });
+  return lines.join("\n");
+}
+
+iiCopy.addEventListener("click", async () => {
+  if (!iiLast) return;
+  try {
+    await navigator.clipboard.writeText(iiAsText(iiLast));
+    iiCopy.textContent = "Copied";
+    setTimeout(() => { iiCopy.textContent = "Copy all"; }, 1500);
+  } catch (e) {
+    iiStatus.textContent = "Could not copy: " + e;
+  }
+});
+
+iiDrop.addEventListener("click", async () => {
+  const r = await window.pywebview.api.browse_for_image();
+  if (r && r.ok && r.path) iiInspect(r.path);
+});
+
+registerDropTarget(iiDrop, paths => iiInspect(paths[0]));
+// Dropping anywhere on the page works too, not just on the box.
+registerDropTarget(screens.imageinfo, paths => iiInspect(paths[0]));

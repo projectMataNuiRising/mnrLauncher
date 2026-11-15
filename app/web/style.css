@@ -1909,3 +1909,38 @@ body {
 @keyframes color-preview-spin {
   to { transform: rotate(360deg); }
 }
+
+
+/* ---------------- Image Inspector ---------------- */
+.ii-page { width: 100%; height: 100%; overflow-y: auto; padding: 18px 24px 40px; }
+.ii-top { display: flex; align-items: center; gap: 14px; }
+.ii-top .back-button { margin-bottom: 0; }
+.ii-title { font-size: 16px; font-weight: 600; flex: 1; }
+.ii-drop { margin: 16px 0 10px; padding: 26px 10px; }
+.ii-result { margin-top: 6px; }
+.ii-head { display: flex; gap: 18px; align-items: flex-start; margin-bottom: 14px; }
+.ii-thumb { flex: 0 0 280px; min-height: 160px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: repeating-conic-gradient(#2a2b30 0 25%, #232428 0 50%) 0 0 / 16px 16px;
+  display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; overflow: hidden; }
+.ii-thumb img { max-width: 100%; max-height: 260px; display: block; }
+.ii-head-text { flex: 1; min-width: 0; }
+.ii-name { font-size: 15px; font-weight: 600; word-break: break-all; }
+.ii-path { font-size: 11px; color: var(--muted); margin: 2px 0 12px; word-break: break-all; }
+.ii-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.ii-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; }
+.ii-card.key { border-color: var(--accent); background: var(--accent-soft); }
+.ii-card-label { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.ii-card-value { font-size: 13px; font-weight: 600; margin-top: 2px; word-break: break-word; }
+.ii-card-note { font-size: 11px; color: var(--muted); margin-top: 3px; word-break: break-word; }
+.ii-warn { font-size: 12px; padding: 7px 10px; border-radius: var(--radius); background: var(--yellow-soft);
+  color: var(--yellow); margin-bottom: 8px; }
+.ii-section { border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; background: var(--panel); }
+.ii-section summary { cursor: pointer; padding: 8px 12px; font-weight: 600; font-size: 13px; list-style: none; }
+.ii-section summary::-webkit-details-marker { display: none; }
+.ii-section summary::before { content: "\25B8"; display: inline-block; width: 14px; color: var(--muted); }
+.ii-section[open] summary::before { content: "\25BE"; }
+.ii-section summary span { color: var(--muted); font-weight: 400; font-size: 11px; margin-left: 6px; }
+.ii-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ii-table td { padding: 4px 12px; border-top: 1px solid var(--border); vertical-align: top; word-break: break-word; }
+.ii-table td:first-child { color: var(--muted); width: 32%; white-space: nowrap; }
+.ii-table tr:hover td { background: var(--panel-alt); }
